@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Local check script — runs the same gates as CI.
+# Usage: ./scripts/check
+
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO_ROOT"
+
+# Unset PYTHONPATH so we prove imports resolve from the new repo root only.
+unset PYTHONPATH
+
+echo "==> uv sync"
+uv sync
+
+echo "==> ruff check"
+uv run ruff check .
+
+echo "==> pytest (full suite, ~4 min)"
+uv run pytest tests -q
+
+echo "==> JSON config validation"
+python3 -m json.tool .mcp.json > /dev/null && echo "  .mcp.json OK"
+python3 -m json.tool .claude-plugin/plugin.json > /dev/null && echo "  .claude-plugin/plugin.json OK"
+python3 -m json.tool hooks/hooks.json > /dev/null && echo "  hooks/hooks.json OK"
+
+echo "==> import smoke (modules load from new root)"
+uv run python -c "
+import server, server.mcp_server, server.runtime, server.dialogue
+from pathlib import Path
+expected = Path('$REPO_ROOT').resolve()
+got = Path(server.mcp_server.__file__).resolve().parent.parent
+assert got == expected, f'expected {expected}, got {got}'
+print('  modules resolve from', expected)
+"
+
+echo
+echo "All checks passed."

@@ -1,0 +1,47 @@
+# macOS
+.DS_Store
+
+# Python caches
+__pycache__/
+*.pyc
+*.pyo
+
+# Test/lint caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Editor / OS
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Runtime artifacts
+analytics/
+.tmp/
+tmp/
+
+# Local secrets / settings overrides
+.env
+.env.local
+*.local.md
+CLAUDE.local.md
+.claude/sessions/
+.claude/worktrees/
+
+# uv lock is tracked; remove this line to ignore it
+# uv.lock
