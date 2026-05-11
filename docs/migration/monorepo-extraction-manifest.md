@@ -164,15 +164,39 @@ These artifacts record past work that is not used to determine current behavior 
 
 ### Redirected (current-facing monorepo surfaces replaced with pointers)
 
-Applied during monorepo-cleanup phase (commits made in `claude-code-tool-dev`). See Verification section below for the precise list.
+Applied in monorepo on branch `chore/extract-codex-collaboration`, commit
+`701952b822a7cb5594d2fde648cec428f5c6d1ae`. Full list of redirected paths
+in monorepo:
 
-- `docs/status/codex-collaboration-current-state.md` → redirect stub
-- `docs/status/codex-collaboration-reconciliation-register.md` → redirect stub
-- `docs/superpowers/specs/codex-collaboration/README.md` → redirect stub
-- `packages/plugins/codex-collaboration/README.md` (if package dir is demoted but kept) → redirect stub
-- Root `pyproject.toml` workspace member entry removed
-- `.claude-plugin/marketplace.json` plugin entry removed
-- Monorepo `.claude/CLAUDE.md` Packages table row updated
+**Configuration / discovery surfaces (modified in place):**
+- `pyproject.toml` — `[tool.uv.workspace] members` no longer includes `packages/plugins/codex-collaboration`; explanatory comment added
+- `.claude-plugin/marketplace.json` — `codex-collaboration` plugin entry removed
+- `.claude/CLAUDE.md` — `codex-collaboration` row removed from Packages table; migration redirect note added
+- `docs/references/README.md` — canonical-source pointer updated from `packages/plugins/codex-collaboration/references/` to new repo
+
+**Package + spec directories demoted to MIGRATED stub:**
+- `packages/plugins/codex-collaboration/` — entire dir contents replaced with `MIGRATED.md`
+- `docs/superpowers/specs/codex-collaboration/` — entire dir contents replaced with `MIGRATED.md`
+
+**Current-facing single docs replaced with redirect content:**
+- `docs/status/codex-collaboration-current-state.md`
+- `docs/status/codex-collaboration-reconciliation-register.md`
+- `docs/tickets/2026-04-29-codex-collaboration-delegation-friction-reduction.md`
+- `docs/tickets/2026-04-29-codex-collaboration-unsupported-server-request-reachability.md`
+- `docs/architecture/2026-05-01-codex-app-server-current-client-platform-rebaseline.md`
+- `docs/architecture/2026-05-01-codex-app-server-v128-permission-architecture-implications.md`
+- `docs/audits/2026-04-29-codex-collaboration-status-verification.md`
+- `docs/assessments/2026-04-29-codex-collaboration-verified-drift-report.md`
+- `docs/decisions/2026-04-29-codex-collaboration-drift-synthesis-recovery.md`
+- `docs/plans/2026-04-30-step-2-sandbox-carve-outs-options-b-e-agents.md`
+- `docs/plans/2026-05-01-codex-app-server-client-platform-exploration-plan.md`
+- `docs/plans/2026-05-01-codex-app-server-client-platform-rebaseline-implementation-plan.md`
+- `docs/plans/2026-05-01-codex-app-server-materialized-thread-and-server-request-probe-plan.md`
+- `docs/plans/2026-05-01-codex-app-server-scratch-home-runtime-probe-plan.md`
+- `docs/plans/2026-05-01-codex-app-server-server-request-envelope-probe-plan.md`
+- `docs/plans/2026-05-01-codex-app-server-v128-execution-sandbox-migration-plan.md`
+- `docs/plans/2026-05-09-codex-collaboration-envelope-diagnostic-overclaim-fix.md`
+- `docs/superpowers/plans/2026-04-21-t07-analytics-7a.md`
 
 ### Excluded (generated residue, unrelated files)
 
@@ -216,6 +240,39 @@ All gates run from `/Users/jp/Projects/active/codex-collaboration/` with `PYTHON
 | Convenience runner | `./scripts/check` | All checks passed |
 
 A live Codex App Server / delegation smoke is **not** required for this migration per the goal statement.
+
+### Residual-Reference Report (monorepo, post-cleanup)
+
+A repo-wide grep for `codex-collaboration|codex_collaboration|packages/plugins/codex-collaboration` in the monorepo (limited to `.md/.toml/.yaml/.yml/.json/.cfg/.ini/.py/.sh`) returns **143 files** post-cleanup. Classification:
+
+| Class | Count | Notes |
+|---|---|---|
+| Migration redirects (stubs I authored) | 22 | The MIGRATED.md stubs, single-file redirects, and updated discovery surfaces — these explicitly point at the new repo |
+| Historical reviews / design docs | ~12 | `docs/reviews/2026-*`, design docs `docs/superpowers/specs/2026-03-*` and `2026-04-*-*-design.md` — snapshot-true, never claimed current authority |
+| Historical plans (snapshot evidence) | ~50 | `docs/plans/2026-03-*` through `2026-04-24-packet-1-*` and earlier; `docs/superpowers/plans/2026-02-*` through `2026-04-20-*` — completed snapshots; memory + closed tickets carry the outcomes |
+| Closed tickets (project history) | 17 | `docs/tickets/closed-tickets/2026-*codex-collaboration*` and related — closed work record; the new repo has its own copy as `migrated-historical`, the monorepo retains them as snapshot ancestry |
+| Benchmark transcripts | ~15 | `docs/benchmarks/dialogue-supersession/v1/*` — frozen benchmark artifacts that reference codex-collaboration paths as they were at run time |
+| Diagnostics | ~7 | `docs/diagnostics/*codex-app-server*` — frozen diagnostic data |
+| Active runtime contract references | 3 | `extensions/skills/next-steps/SKILL.md`, `extensions/skills/making-recommendations/SKILL.md`, `extensions/skills/making-recommendations/references/codex-delta.md` — reference the plugin's runtime tool names (`mcp__plugin_codex-collaboration_codex-collaboration__codex.consult`, etc.). The runtime contract is unchanged by the source migration; the plugin is still installed under the same name, so these references work without modification |
+| Historical handoffs (gitignored in monorepo) | many | Local-only session-state files |
+| **Disallowed live authority** | **0** | — |
+| **Unresolved exceptions** | **0** | — |
+
+Standard met: **zero stale live authority** in the monorepo. No file in the monorepo claims to be the current source of truth for codex-collaboration behavior, status, or open work; all such claims have either been moved or replaced with a redirect.
+
+The repo-wide string count is non-zero by design (historical artifacts mention codex-collaboration); the standard is not zero string matches but zero stale live authority.
+
+### Post-Initial-Commit Cleanup in the New Repo
+
+Initial commit `b3c1f2c2bec593463853fc3142eba60bd23657dc` migrated docs that
+still referenced monorepo paths internally
+(`packages/plugins/codex-collaboration/server/*`,
+`docs/superpowers/specs/codex-collaboration/*`). Commit
+`cfcb642` (`chore: rewrite stale monorepo paths in active
+docs/skills/references`) rewrote those paths to the standalone layout
+across active docs, `references/dialogue-turn-contract.md`, and
+`skills/shakedown-b1/SKILL.md`. Closed tickets, archived handoffs,
+design docs, and evidence JSON were deliberately left snapshot-true.
 
 ## History Preservation
 
