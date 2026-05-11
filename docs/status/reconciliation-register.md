@@ -2,9 +2,8 @@
 
 Use this file for open or unreconciled work.
 
-Start at [codex-collaboration Current State](./codex-collaboration-current-state.md)
-for project orientation, implemented-now surface, authority ownership, and
-reader routing.
+Start at [Current State](./current-state.md) for project orientation,
+implemented-now surface, authority ownership, and reader routing.
 
 Last reconciled: 2026-04-30
 
@@ -95,7 +94,7 @@ Scope included here:
 
 | ID | State | Owning artifact | Current truth | Exit condition |
 |---|---|---|---|---|
-| `DIALOGUE-FORK` | `deferred` | `docs/specs/decisions.md` and `docs/specs/contracts.md` | Dialogue branchability is preserved as an architectural property, but the intended surface is `seed_from` on `codex.dialogue.start` (copy-and-diverge via current-head `thread/fork`), not a standalone `codex.dialogue.fork` tool. Tree-structured dialogue and prefix seeding are explicitly deferred. See [decisions.md §Dialogue Fork Scope](../superpowers/specs/codex-collaboration/decisions.md#dialogue-fork-scope). | A concrete seeded-dialogue use case justifies implementation. Constraints: admissibility, fresh control resolution, dialogue-thread `thread/fork` verification, and D-07 ordering dependency. |
+| `DIALOGUE-FORK` | `deferred` | `docs/specs/decisions.md` and `docs/specs/contracts.md` | Dialogue branchability is preserved as an architectural property, but the intended surface is `seed_from` on `codex.dialogue.start` (copy-and-diverge via current-head `thread/fork`), not a standalone `codex.dialogue.fork` tool. Tree-structured dialogue and prefix seeding are explicitly deferred. See [decisions.md §Dialogue Fork Scope](../specs/decisions.md#dialogue-fork-scope). | A concrete seeded-dialogue use case justifies implementation. Constraints: admissibility, fresh control resolution, dialogue-thread `thread/fork` verification, and D-07 ordering dependency. |
 | `MCP-STRUCTURED-ERROR-REASON` | `deferred` | `docs/specs/contracts.md` | MCP clients still rely on text-prefix recoverability for certain delegation errors because a structured wire-level `reason` field is explicitly deferred to a future packet. | Define and land the structured wire field in a follow-up packet. |
 | `ADVISORY-WIDENING-ROTATION` | `deferred` | `docs/specs/advisory-runtime-policy.md` plus `server/control_plane.py` and `server/profiles.py` | Advisory widening, narrowing, freeze-and-rotate, and reap behavior are specified as future-scope design, clearly separated from current Packet 1 fixed-posture behavior. The spec text (`advisory-runtime-policy.md`) has been restructured into current behavior and future-scope sections (D-03). The current implementation rejects widened advisory requests and rejects widened profile settings until rotate support exists. | Implement advisory widening/rotation with matching recovery and profile behavior. |
 | `PHASED-CONSULTATION-PROFILES` | `deferred` | `references/consultation-profiles.yaml` plus `server/profiles.py` | The profile catalog includes phased profiles such as `debugging`, but the resolver currently rejects any profile with `phases` until phase-progression support exists. This is an intentional future-scope surface, not an accidental runtime bug. | Implement phase-progression support for phased profiles, or narrow the shipped profile catalog/documentation so only currently resolvable profiles are advertised. |

@@ -12,7 +12,7 @@ Adopt the following topology:
 - **Canonical reader entry point:** a new current-state synthesis document under
   `docs/status/`
 - **Open/unreconciled-work index:** the existing
-  `docs/status/codex-collaboration-reconciliation-register.md`
+  `docs/status/reconciliation-register.md`
 - **Supporting audit evidence only:** the rejected assessment in
   `docs/assessments/`, explicitly labeled non-authoritative or superseded if
   retained
@@ -66,8 +66,8 @@ The live reconciliation register already defines itself as a **working index** o
 still-open, still-deferred, or still-unreconciled work and pushes excess detail
 back to owning artifacts:
 
-- `docs/status/codex-collaboration-reconciliation-register.md:7-20`
-- `docs/status/codex-collaboration-reconciliation-register.md:107-109`
+- `docs/status/reconciliation-register.md:7-20`
+- `docs/status/reconciliation-register.md:107-109`
 
 The owner model for behavioral truth already exists in the spec authority map:
 
@@ -216,6 +216,6 @@ topology implementation or further architecture selection.
 
 ## References
 
-- [codex-collaboration authority map](../superpowers/specs/codex-collaboration/spec.yaml)
-- [codex-collaboration reconciliation register](../status/codex-collaboration-reconciliation-register.md)
+- [codex-collaboration authority map](../specs/spec.yaml)
+- [codex-collaboration reconciliation register](../status/reconciliation-register.md)
 - [rejected drift report](../assessments/2026-04-29-codex-collaboration-verified-drift-report.md)

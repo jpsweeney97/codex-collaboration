@@ -124,11 +124,11 @@ Read every item below before any write. Each read has a specific load-bearing pu
 | `docs/plans/2026-05-01-codex-app-server-client-platform-rebaseline-implementation-plan.md:204-220` | Evidence-check `jq` commands and expected-value bullets that read `local_compatibility` and `architecture_spec_readiness_delta` from the sibling JSON. These are Markdown-embedded consumers of the canonical JSON fields that Task 3 renames. Drives Task 5.5 reconciliation. |
 | `docs/diagnostics/2026-05-01-codex-app-server-server-request-envelope-probes.md` (full, with extra attention to lines ≈100-200) | Confirm the five enumerated overclaim sites; surface any other interpretive overclaims. |
 | `docs/diagnostics/codex-app-server-server-request-envelope-probes.json` (sibling JSON, may or may not exist) | Discover existence; if present, identify any parallel overclaim fields. Drives Task 3 disposition. |
-| `docs/status/codex-collaboration-reconciliation-register.md:9-70` | "Last reconciled" timestamp + priority order + `T-20260429-01` row "Current truth"/"Exit condition" cells. Drives Task 4 disposition. |
+| `docs/status/reconciliation-register.md:9-70` | "Last reconciled" timestamp + priority order + `T-20260429-01` row "Current truth"/"Exit condition" cells. Drives Task 4 disposition. |
 | `docs/tickets/2026-04-29-codex-collaboration-delegation-friction-reduction.md:212-230` (T-20260429-01 ticket) | Confirm acceptance criteria and that AC #1 smoke / AC #2 credential-boundary probe / AC #3 regression assertion + suite pass evidence is genuinely missing. |
 | `docs/tickets/2026-04-29-codex-collaboration-unsupported-server-request-reachability.md` (T-20260429-02 ticket — context only, no edits) | Context for the Sweep Classification Rules: the parser-route classification table at lines 67-77 ("Supported as `<kind>`" / "Supported (parked)") is `legacy-parser-route-vocabulary`, not an overclaim. The T-20260429-02 method-by-method classification work is OUT of this plan's scope. Read so the worker can confidently classify sweep matches against this file. |
 | `docs/plans/2026-05-01-codex-app-server-server-request-envelope-probe-plan.md:666-672` (May-1 probe-plan vocabulary) | Context for the Sweep Classification Rules: the May-1 four-state vocabulary (`supported` / `unsupported` / `unknown` / `unparseable`) is `legacy-parser-route-vocabulary`. Read to ground the Vocabulary Succession framing in the Authority Basis section. |
-The pre-edit `rg` sweep below treats every file under `docs/diagnostics/2026-05-01-codex-app-server-*.md`, `docs/diagnostics/codex-app-server-*.json`, `docs/plans/2026-05-01-codex-app-server-*.md`, `docs/tickets/2026-04-29-codex-collaboration-*.md`, and `docs/status/codex-collaboration-reconciliation-register.md` as candidates. If the sweep surfaces hits this plan does not enumerate, Task 1 stops and surfaces the finding rather than expanding scope silently.
+The pre-edit `rg` sweep below treats every file under `docs/diagnostics/2026-05-01-codex-app-server-*.md`, `docs/diagnostics/codex-app-server-*.json`, `docs/plans/2026-05-01-codex-app-server-*.md`, `docs/tickets/2026-04-29-codex-collaboration-*.md`, and `docs/status/reconciliation-register.md` as candidates. If the sweep surfaces hits this plan does not enumerate, Task 1 stops and surfaces the finding rather than expanding scope silently.
 
 **Out-of-scope docs (deferred to follow-up):** `docs/architecture/2026-05-01-codex-app-server-current-client-platform-rebaseline.md` contains the same "local classification was `supported`" wording (lines 56, 93, 148-160) and will need a separate vocabulary-reconciliation pass. Active handoffs under `docs/handoffs/` capture session state at a point in time and are not patched here. Both are explicitly excluded from this plan's sweep, classification, and commit scope to maintain a single unambiguous patch boundary.
 
@@ -198,7 +198,7 @@ rg -n -i "supported|preserved|lossy|ready_to_close_ticket|proves compatibility|c
    docs/diagnostics/codex-app-server-*.json \
    docs/plans/2026-05-01-codex-app-server-*.md \
    docs/tickets/2026-04-29-codex-collaboration-*.md \
-   docs/status/codex-collaboration-reconciliation-register.md
+   docs/status/reconciliation-register.md
 ```
 
 **Classification scope:** Full per-line classification is mandatory only for files in this plan's write set (diagnostic `.md`, diagnostic `.json`, register, rebaseline plan). For other swept files (tickets, other plans), confirm no `interpretive-overclaim` exists — a brief spot-check is sufficient; exhaustive per-line annotation is not required.
@@ -241,7 +241,7 @@ Expected scope of files this plan touches (any of these may legitimately appear 
 
 - `docs/diagnostics/2026-05-01-codex-app-server-server-request-envelope-probes.md` (Task 2, always)
 - `docs/diagnostics/codex-app-server-server-request-envelope-probes.json` (Task 3, conditional)
-- `docs/status/codex-collaboration-reconciliation-register.md` (Task 4, conditional)
+- `docs/status/reconciliation-register.md` (Task 4, conditional)
 - `docs/plans/2026-05-01-codex-app-server-client-platform-rebaseline-implementation-plan.md` (Step 5.5, conditional — state-based: runs when canonical JSON fields carry rebaseline vocabulary, whether from this run's Task 3 or a prior commit; see Step 5.5 skip condition)
 
 Branch on the snapshot:
@@ -267,7 +267,7 @@ rg -n -i "supported|preserved|lossy|ready_to_close_ticket|proves compatibility|c
    docs/diagnostics/codex-app-server-*.json \
    docs/plans/2026-05-01-codex-app-server-*.md \
    docs/tickets/2026-04-29-codex-collaboration-*.md \
-   docs/status/codex-collaboration-reconciliation-register.md
+   docs/status/reconciliation-register.md
 ```
 
 The `-i` flag is intentional: capital-S "Supported" wording in the T-20260429-02 ticket's parser-route classification table and lowercase "supported" wording in the diagnostic must both surface so the Sweep Classification Rules above can decide which matches are overclaims and which are legacy parser-route vocabulary.
@@ -372,7 +372,7 @@ Task 3 implements in-place interpretive correction using the consumer-discovery 
 
 Sub-step 1.5a — register inspection.
 
-Read `docs/status/codex-collaboration-reconciliation-register.md:9-70`. Check:
+Read `docs/status/reconciliation-register.md:9-70`. Check:
 
 - Does the priority `#1` line at ~line 52 still say "Implement `T-20260429-01` Phase 1 sandbox carve-outs"?
 - Does the `T-20260429-01` row "Current truth" cell at ~line 67 still describe the work as unlanded?
@@ -779,7 +779,7 @@ git add docs/diagnostics/codex-app-server-server-request-envelope-probes.json
 
 **Files:**
 
-- Conditional Modify: `docs/status/codex-collaboration-reconciliation-register.md`. Skip entirely if Task 1.5a found the register already reflects landed-implementation status across priority line, Current truth cell, AND Exit condition cell.
+- Conditional Modify: `docs/status/reconciliation-register.md`. Skip entirely if Task 1.5a found the register already reflects landed-implementation status across priority line, Current truth cell, AND Exit condition cell.
 
 - [ ] **Step 4.1: Branch on the Task 1.5 disposition.**
 
@@ -844,7 +844,7 @@ Rationale: appending an annotation to the Current truth cell is not enough on it
 
 ```bash
 rg -n -i "T-20260429-01|Implement.*Phase 1|Land the Phase 1" \
-   docs/status/codex-collaboration-reconciliation-register.md
+   docs/status/reconciliation-register.md
 ```
 
 Expected: every `T-20260429-01` line either reflects landed-implementation, names AC #1-#3 closure work, or is general Phase 1 context. No surviving "Implement `T-20260429-01` Phase 1" framing in the priority order. No surviving "Land the Phase 1 sandbox carve-outs" framing in the Exit condition cell.
@@ -854,7 +854,7 @@ Note: the register's global "Last reconciled" date at ≈line 9 is intentionally
 - [ ] **Step 4.6: Stage the register change.**
 
 ```bash
-git add docs/status/codex-collaboration-reconciliation-register.md
+git add docs/status/reconciliation-register.md
 ```
 
 ---
@@ -871,7 +871,7 @@ rg -n -i "supported|preserved|lossy|ready_to_close_ticket|proves compatibility|c
    docs/diagnostics/codex-app-server-*.json \
    docs/plans/2026-05-01-codex-app-server-*.md \
    docs/tickets/2026-04-29-codex-collaboration-*.md \
-   docs/status/codex-collaboration-reconciliation-register.md
+   docs/status/reconciliation-register.md
 ```
 
 - [ ] **Step 5.2: Classify matches in target files; spot-check others.**
@@ -905,7 +905,7 @@ If any pair contradicts: STOP. Identify the owning task (Task 2 for `.md` wordin
 git diff --cached --name-only
 ```
 
-Expected: only files under `docs/diagnostics/`, optionally `docs/status/codex-collaboration-reconciliation-register.md`, optionally `docs/plans/2026-05-01-codex-app-server-client-platform-rebaseline-implementation-plan.md` (staged later in Step 5.5). No `packages/`, no `.claude/hooks/`, no scripts. If a code file is staged, unstage and surface.
+Expected: only files under `docs/diagnostics/`, optionally `docs/status/reconciliation-register.md`, optionally `docs/plans/2026-05-01-codex-app-server-client-platform-rebaseline-implementation-plan.md` (staged later in Step 5.5). No `packages/`, no `.claude/hooks/`, no scripts. If a code file is staged, unstage and surface.
 
 - [ ] **Step 5.5: Reconcile the rebaseline implementation plan's evidence-check section.**
 
@@ -978,7 +978,7 @@ Skip this step if Step 5.5 was skipped.
 git status
 ```
 
-Expected: only the planned docs files appear in `git status` as staged — `docs/diagnostics/` targets, optionally `docs/diagnostics/codex-app-server-server-request-envelope-probes.json` (Task 3), optionally `docs/status/codex-collaboration-reconciliation-register.md` (Task 4), and optionally `docs/plans/2026-05-01-codex-app-server-client-platform-rebaseline-implementation-plan.md` (Step 5.5; state-based condition independent of Task 3 — may be staged even when Task 3 was skipped if canonical JSON fields already carry rebaseline vocabulary from a prior commit). Pre-existing unrelated unstaged changes recorded in Task 0 may still be present in the working tree; that is acceptable. Confirm only the planned docs are staged for commit.
+Expected: only the planned docs files appear in `git status` as staged — `docs/diagnostics/` targets, optionally `docs/diagnostics/codex-app-server-server-request-envelope-probes.json` (Task 3), optionally `docs/status/reconciliation-register.md` (Task 4), and optionally `docs/plans/2026-05-01-codex-app-server-client-platform-rebaseline-implementation-plan.md` (Step 5.5; state-based condition independent of Task 3 — may be staged even when Task 3 was skipped if canonical JSON fields already carry rebaseline vocabulary from a prior commit). Pre-existing unrelated unstaged changes recorded in Task 0 may still be present in the working tree; that is acceptable. Confirm only the planned docs are staged for commit.
 
 - [ ] **Step 6.2: Commit.**
 

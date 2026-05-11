@@ -16,11 +16,11 @@ artifacts win.
 ## Reader Routing
 
 - **Current state / project orientation:** this document
-- **Open or unreconciled work:** [codex-collaboration reconciliation register](./codex-collaboration-reconciliation-register.md)
+- **Open or unreconciled work:** [reconciliation register](./reconciliation-register.md)
 - **Behavioral truth / contract ownership:** the owner documents under
   `docs/specs/`, per the authority map in
-  [`spec.yaml`](../superpowers/specs/codex-collaboration/spec.yaml)
-- **Implementation truth:** `` code and tests
+  [`spec.yaml`](../specs/spec.yaml)
+- **Implementation truth:** `server/`, `scripts/`, `skills/`, `agents/`, `hooks/`, `references/`, `tests/` (this repo's code and tests)
 - **Supporting audit evidence:** diagnostics, closed-ticket closeout evidence, and
   assessment-layer documents
 
@@ -31,7 +31,7 @@ current code together.
 ## Authority Owners
 
 Behavioral claim ownership comes from
-[`docs/specs/spec.yaml`](../superpowers/specs/codex-collaboration/spec.yaml).
+[`docs/specs/spec.yaml`](../specs/spec.yaml).
 
 | Authority owner | Owns | Primary artifact(s) |
 |---|---|---|
@@ -89,7 +89,7 @@ For implementation details, start from:
 
 The following remain intentionally deferred or not yet implemented:
 
-- dialogue branching via `seed_from` on `codex.dialogue.start` (copy-and-diverge; `codex.dialogue.fork` as a standalone tool is permanently replaced — see [decisions.md §Dialogue Fork Scope](../superpowers/specs/codex-collaboration/decisions.md#dialogue-fork-scope))
+- dialogue branching via `seed_from` on `codex.dialogue.start` (copy-and-diverge; `codex.dialogue.fork` as a standalone tool is permanently replaced — see [decisions.md §Dialogue Fork Scope](../specs/decisions.md#dialogue-fork-scope))
 - advisory widening / narrowing / rotation behavior as live implementation
 - phased consultation profiles
 - broader structured MCP error reasons for certain delegation failures

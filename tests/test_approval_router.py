@@ -77,13 +77,13 @@ def test_parse_command_approval_preserves_request_payload_opaquely() -> None:
             "itemId": "item-1",
             "threadId": "thr-1",
             "turnId": "turn-1",
-            "command": "pytest packages/plugins/codex-collaboration/tests/test_runtime.py",
+            "command": "pytest tests/test_runtime.py",
             "cwd": "/repo/worktree",
             "commandActions": [
                 {
                     "type": "search",
-                    "command": "pytest packages/plugins/codex-collaboration/tests/test_runtime.py",
-                    "path": "packages/plugins/codex-collaboration/tests/test_runtime.py",
+                    "command": "pytest tests/test_runtime.py",
+                    "path": "tests/test_runtime.py",
                     "query": None,
                 }
             ],
@@ -109,13 +109,13 @@ def test_parse_command_approval_preserves_request_payload_opaquely() -> None:
     assert request.available_decisions == ("accept", "decline", "cancel")
     assert request.requested_scope == {
         "approvalId": "appr-1",
-        "command": "pytest packages/plugins/codex-collaboration/tests/test_runtime.py",
+        "command": "pytest tests/test_runtime.py",
         "cwd": "/repo/worktree",
         "commandActions": [
             {
                 "type": "search",
-                "command": "pytest packages/plugins/codex-collaboration/tests/test_runtime.py",
-                "path": "packages/plugins/codex-collaboration/tests/test_runtime.py",
+                "command": "pytest tests/test_runtime.py",
+                "path": "tests/test_runtime.py",
                 "query": None,
             }
         ],

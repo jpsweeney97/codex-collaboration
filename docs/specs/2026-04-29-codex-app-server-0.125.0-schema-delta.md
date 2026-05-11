@@ -513,7 +513,7 @@ following tracking posture for the unresolved surfaces it names:
 | Current-facing docs that name `0.117.0` | Untracked here unless a pin change begins | Compatibility-update artifact must update `delivery.md`, `README.md`, active ticket references, and fixture-path comments as part of the same change |
 
 If a compatibility-update artifact is created, update
-`docs/status/codex-collaboration-reconciliation-register.md` after source
+`docs/status/reconciliation-register.md` after source
 artifacts have been patched and verified. The register summarizes the
 source-truth state; it is not the first home for the detailed upgrade evidence.
 

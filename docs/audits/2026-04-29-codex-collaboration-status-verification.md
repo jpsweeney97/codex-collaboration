@@ -1,8 +1,8 @@
 # Codex-Collaboration Status Documents — Verification Report
 
 > **Scope:** Reject-first verification of three current-facing status artifacts:
-> - `docs/status/codex-collaboration-current-state.md`
-> - `docs/status/codex-collaboration-reconciliation-register.md`
+> - `docs/status/current-state.md`
+> - `docs/status/reconciliation-register.md`
 > - `docs/assessments/2026-04-29-codex-collaboration-verified-drift-report.md`
 >
 > **Method:** Each material claim treated as unverified until directly checked
@@ -33,7 +33,7 @@ Direct ticket-frontmatter reads:
 
 ## Verified TRUE
 
-### From `codex-collaboration-current-state.md`
+### From `current-state.md`
 
 - `Claim`: 10 MCP tools listed under "Implemented Now" (lines 53-62)
   - `Evidence`: `server/mcp_server.py:18-187` `TOOL_DEFINITIONS` registers exactly the 10 named tools (`codex.status`, `codex.consult`, `codex.dialogue.start|reply|read`, `codex.delegate.start|poll|promote|discard|decide`).
@@ -55,7 +55,7 @@ Direct ticket-frontmatter reads:
   - `Evidence`: `docs/decisions/2026-04-29-codex-collaboration-drift-synthesis-recovery.md:28-49` mandates the four-field separation and the same authority enumeration; `current-state.md:6-14` reproduces the required mottos `"Start here for current state"` and `"This document is not a behavioral tie-breaker"` verbatim.
   - `Why sufficient`: Decision record and artifact line up word-for-word on required language.
 
-### From `codex-collaboration-reconciliation-register.md`
+### From `reconciliation-register.md`
 
 - `Claim`: Active ticket rows are open with cited owning artifacts
   - `Evidence`: Frontmatter table above; all three open tickets have `status: open` at frontmatter L6 of their respective files. Priority-high adjective for T-20260429-02 is confirmed.
@@ -136,7 +136,7 @@ This category captures findings whose claim was true at the report's declared an
 
 - `Claim` D-04 (drift report Section 2 Executive Verdict and Section 6): "the reconciliation register is the closest current index, but it omits at least one live high-priority ticket (`T-20260429-02`)"
   - `True at snapshot`: At `88f098a1`, the register did not contain a `T-20260429-02` row. The drift report was written against that state.
-  - `Stale in saved artifact`: `git diff 88f098a1..a5fd568d -- docs/status/codex-collaboration-reconciliation-register.md` shows the row was added at line 69 in the same commit that saved the report (`a5fd568d`). At current HEAD `19cd5183`, the register contains the row. The report's body still asserts the omission.
+  - `Stale in saved artifact`: `git diff 88f098a1..a5fd568d -- docs/status/reconciliation-register.md` shows the row was added at line 69 in the same commit that saved the report (`a5fd568d`). At current HEAD `19cd5183`, the register contains the row. The report's body still asserts the omission.
   - `Stale recommendation`: Section 8 step 4 ("add T-20260429-02") was already done by the report's authoring commit. The "widen the closed-ticket-path warning" half of the same step is still actionable (T-20260330-06 and T-20260327-01 remain closed-in-root with no register acknowledgment).
   - `Stale saved-artifact contradiction`: Section 5 line 57 lists T-20260429-02 in "Verified open work"; Section 2 / Section 6 say the register omits it. The two statements were each true against their respective evidence at snapshot time (Section 5 against the ticket file, Section 2 against the pre-update register), and they are not logically inconsistent on their face. They become a contradiction in the saved artifact because the same commit updated the register without updating the body — the saved file pairs a "still missing" claim with a "now present" register line. The repair is an addressed-status annotation on D-04 and Section 8 step 4, not a logical reconciliation of Section 5 against the D-04 body.
   - `Required correction`: Add an addressed-status note (inline at Section 6 D-04 and Section 8 step 4, or via a top-of-document "Findings status" appendix). Split Section 8 step 4 into "addressed: add T-20260429-02" and "still actionable: widen closed-ticket-path warning."
@@ -171,9 +171,9 @@ This category captures findings whose claim was true at the report's declared an
 
 ## Bottom Line
 
-`codex-collaboration-current-state.md`: **reliable as a code/spec-surface index for the claims this review verified**. The 10 MCP-tool list, sandbox-default, fork-absence claim, authority-owner mapping, and three of the five deferred-list items (`codex.dialogue.fork`, advisory widening, phased profiles) all check out against `mcp_server.py`, `runtime.py`, `spec.yaml`, and the supporting tests. **Live-runtime claims unverified in this pass** — "advisory consultation and dialogue are live" is inferred from the closed-tickets chain, not from a current-HEAD smoke run or integration test. **Two deferred-list items remain unverified in this pass** ("structured MCP error reasons" and "classified support for unsupported request kinds"); they may well be true, but I did not verify them directly. Minor incompleteness at the operator-surfaces section omits `/dialogue` and `/shakedown-b1`, hedged but not eliminated by the "include" prefix.
+`current-state.md`: **reliable as a code/spec-surface index for the claims this review verified**. The 10 MCP-tool list, sandbox-default, fork-absence claim, authority-owner mapping, and three of the five deferred-list items (`codex.dialogue.fork`, advisory widening, phased profiles) all check out against `mcp_server.py`, `runtime.py`, `spec.yaml`, and the supporting tests. **Live-runtime claims unverified in this pass** — "advisory consultation and dialogue are live" is inferred from the closed-tickets chain, not from a current-HEAD smoke run or integration test. **Two deferred-list items remain unverified in this pass** ("structured MCP error reasons" and "classified support for unsupported request kinds"); they may well be true, but I did not verify them directly. Minor incompleteness at the operator-surfaces section omits `/dialogue` and `/shakedown-b1`, hedged but not eliminated by the "include" prefix.
 
-`codex-collaboration-reconciliation-register.md`: **best current index and reliable for the rows it contains**. Every listed open-ticket, deferred, and drift row that this review checked verifies against code/spec/ticket evidence. **Not complete for closed-in-root scope or priority authority**: `T02-CLOSED-TICKET-PATH` is too narrow (T-20260330-06 and T-20260327-01 are also closed-in-root, with frontmatter cited in the verification frame); the priority ordering at lines 51-62 has no ratifying authority artifact. The `P1-MINOR-SWEEP` row's 14-item enumeration was not directly verified against the carry-forward tracker.
+`reconciliation-register.md`: **best current index and reliable for the rows it contains**. Every listed open-ticket, deferred, and drift row that this review checked verifies against code/spec/ticket evidence. **Not complete for closed-in-root scope or priority authority**: `T02-CLOSED-TICKET-PATH` is too narrow (T-20260330-06 and T-20260327-01 are also closed-in-root, with frontmatter cited in the verification frame); the priority ordering at lines 51-62 has no ratifying authority artifact. The `P1-MINOR-SWEEP` row's 14-item enumeration was not directly verified against the carry-forward tracker.
 
 `2026-04-29-codex-collaboration-verified-drift-report.md`: **useful supporting evidence with two required corrections before cleanup work**. The header `Status note` correctly demotes it to non-authoritative supporting evidence per the drift-synthesis-recovery decision. Required corrections:
 

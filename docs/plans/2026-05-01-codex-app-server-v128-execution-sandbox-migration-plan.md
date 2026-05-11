@@ -175,7 +175,7 @@ Read and reference:
   - Current tested/minimum version reporting.
 - `tests/fixtures/codex-app-server/0.117.0/`
   - Existing fixture baseline for the old `readOnlyAccess` request shape.
-- `docs/status/codex-collaboration-reconciliation-register.md`
+- `docs/status/reconciliation-register.md`
   - Current T-20260429-01 status and exit condition context.
 
 Create or update only after the relevant task says to:
