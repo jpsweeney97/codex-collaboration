@@ -68,10 +68,10 @@ Read first:
 - `docs/diagnostics/codex-app-server-server-request-envelope-probes.json`
 - `docs/plans/2026-05-01-codex-app-server-v128-execution-sandbox-migration-plan.md`
 - `docs/tickets/2026-04-29-codex-collaboration-unsupported-server-request-reachability.md`
-- `packages/plugins/codex-collaboration/server/approval_router.py`
-- `packages/plugins/codex-collaboration/server/runtime.py`
-- `packages/plugins/codex-collaboration/server/delegation_controller.py`
-- `packages/plugins/codex-collaboration/server/codex_compat.py`
+- `server/approval_router.py`
+- `server/runtime.py`
+- `server/delegation_controller.py`
+- `server/codex_compat.py`
 
 ## Files And Responsibilities
 
@@ -88,21 +88,21 @@ Create:
 
 Modify:
 
-- `packages/plugins/codex-collaboration/tests/test_approval_router.py`
+- `tests/test_approval_router.py`
   - Add 0.128 observed-envelope parser regression and schema-visible unsupported-method parser tests.
-- `packages/plugins/codex-collaboration/tests/test_handler_branches_integration.py`
+- `tests/test_handler_branches_integration.py`
   - Add lifecycle tests only for gaps not already covered by unknown-kind parse-failure and parseable-unknown tests.
-- `packages/plugins/codex-collaboration/tests/test_runtime.py`
+- `tests/test_runtime.py`
   - Add regression coverage that live `turn/completed` status remains authoritative over historical `thread/read` status/error fields.
 - `docs/tickets/2026-04-29-codex-collaboration-unsupported-server-request-reachability.md`
   - Narrow the ticket after the classification artifact and tests exist.
 
 Do not modify in this plan unless the v128 decision packet selects a branch:
 
-- `packages/plugins/codex-collaboration/server/runtime.py`
-- `packages/plugins/codex-collaboration/server/control_plane.py`
-- `packages/plugins/codex-collaboration/server/codex_compat.py`
-- `packages/plugins/codex-collaboration/tests/fixtures/codex-app-server/`
+- `server/runtime.py`
+- `server/control_plane.py`
+- `server/codex_compat.py`
+- `tests/fixtures/codex-app-server/`
 
 ## Stop Conditions
 
@@ -405,7 +405,7 @@ git commit -m "docs: record app-server rebaseline capabilities"
 
 **Files:**
 
-- Modify: `packages/plugins/codex-collaboration/tests/test_approval_router.py`
+- Modify: `tests/test_approval_router.py`
 - Read: `docs/diagnostics/codex-app-server-server-request-envelope-probes.json`
 
 - [ ] Re-read the captured live command-approval envelope before writing the test.
@@ -427,7 +427,7 @@ Expected:
 
 Normalize ephemeral scratch path values and redacted correlation ids, but keep the shape-critical fields from the observed envelope exact: integer `id`, method, context keys, payload field names, `commandActions` shape, and mixed `availableDecisions` entries. Do not rewrite structured decisions into string enum names.
 
-Append this test to `packages/plugins/codex-collaboration/tests/test_approval_router.py`:
+Append this test to `tests/test_approval_router.py`:
 
 ```python
 def test_parse_live_0128_command_approval_envelope_documents_lossy_decisions() -> None:
@@ -513,7 +513,7 @@ This test intentionally documents current lossy behavior: the parser maps the li
 Run:
 
 ```bash
-uv run pytest packages/plugins/codex-collaboration/tests/test_approval_router.py::test_parse_live_0128_command_approval_envelope_documents_lossy_decisions -q
+uv run pytest tests/test_approval_router.py::test_parse_live_0128_command_approval_envelope_documents_lossy_decisions -q
 ```
 
 Expected: one passing test.
@@ -523,7 +523,7 @@ Expected: one passing test.
 Run:
 
 ```bash
-uv run pytest packages/plugins/codex-collaboration/tests/test_approval_router.py -q
+uv run pytest tests/test_approval_router.py -q
 ```
 
 Expected: all tests in the module pass.
@@ -532,7 +532,7 @@ Expected: all tests in the module pass.
 
 **Files:**
 
-- Modify: `packages/plugins/codex-collaboration/tests/test_approval_router.py`
+- Modify: `tests/test_approval_router.py`
 - Create: `docs/diagnostics/2026-05-01-codex-app-server-server-request-method-classification.md`
 - Create: `docs/diagnostics/codex-app-server-server-request-method-classification.json`
 - Read: `docs/tickets/2026-04-29-codex-collaboration-unsupported-server-request-reachability.md`
@@ -541,7 +541,7 @@ Expected: all tests in the module pass.
 
 Do not use malformed synthetic params for negative classifications. Each negative test must start from a minimal fixture-schema-conformant request shape, then assert the local parser boundary: `parse_pending_server_request()` requires repo-owned request context (`itemId`, `threadId`, and a string `turnId`) even when the app-server schema for that method does not.
 
-Add these imports near the top of `packages/plugins/codex-collaboration/tests/test_approval_router.py` if they are not already present:
+Add these imports near the top of `tests/test_approval_router.py` if they are not already present:
 
 ```python
 import json
@@ -549,7 +549,7 @@ from pathlib import Path
 from typing import Any
 ```
 
-Append these helper fixtures and tests to `packages/plugins/codex-collaboration/tests/test_approval_router.py`:
+Append these helper fixtures and tests to `tests/test_approval_router.py`:
 
 ```python
 def _schema_shaped_unobserved_server_requests() -> dict[str, dict[str, Any]]:
@@ -749,7 +749,7 @@ def test_parse_legacy_approval_schema_shapes_are_unparseable_by_local_parser() -
 Run:
 
 ```bash
-uv run pytest packages/plugins/codex-collaboration/tests/test_approval_router.py -q
+uv run pytest tests/test_approval_router.py -q
 ```
 
 Expected: all tests pass.
@@ -759,7 +759,7 @@ Expected: all tests pass.
 Run:
 
 ```bash
-uv run pytest packages/plugins/codex-collaboration/tests/test_handler_branches_integration.py::test_unknown_kind_parse_failure_terminalizes_unknown packages/plugins/codex-collaboration/tests/test_handler_branches_integration.py::test_unknown_kind_unrecognized_method_lineage_status_is_unknown -q
+uv run pytest tests/test_handler_branches_integration.py::test_unknown_kind_parse_failure_terminalizes_unknown tests/test_handler_branches_integration.py::test_unknown_kind_unrecognized_method_lineage_status_is_unknown -q
 ```
 
 Expected: both tests pass.
@@ -944,7 +944,7 @@ Expected:
 Commit message:
 
 ```bash
-git add packages/plugins/codex-collaboration/tests/test_approval_router.py packages/plugins/codex-collaboration/tests/test_handler_branches_integration.py docs/diagnostics/2026-05-01-codex-app-server-server-request-method-classification.md docs/diagnostics/codex-app-server-server-request-method-classification.json
+git add tests/test_approval_router.py tests/test_handler_branches_integration.py docs/diagnostics/2026-05-01-codex-app-server-server-request-method-classification.md docs/diagnostics/codex-app-server-server-request-method-classification.json
 git commit -m "test: classify app-server server requests"
 ```
 
@@ -954,13 +954,13 @@ If `test_handler_branches_integration.py` was not modified because existing life
 
 **Files:**
 
-- Modify: `packages/plugins/codex-collaboration/tests/test_runtime.py`
-- Read: `packages/plugins/codex-collaboration/server/runtime.py`
-- Read: `packages/plugins/codex-collaboration/server/turn_extraction.py`
+- Modify: `tests/test_runtime.py`
+- Read: `server/runtime.py`
+- Read: `server/turn_extraction.py`
 
 - [ ] Add a regression that execution turns do not use `thread/read` fallback on failed terminal status.
 
-Append this test near the existing `run_execution_turn` and fallback tests in `packages/plugins/codex-collaboration/tests/test_runtime.py`:
+Append this test near the existing `run_execution_turn` and fallback tests in `tests/test_runtime.py`:
 
 ```python
 def test_execution_failed_turn_does_not_use_thread_read_fallback(
@@ -1055,7 +1055,7 @@ def test_advisory_fallback_does_not_replace_live_terminal_status(
 Run:
 
 ```bash
-uv run pytest packages/plugins/codex-collaboration/tests/test_runtime.py::test_execution_failed_turn_does_not_use_thread_read_fallback packages/plugins/codex-collaboration/tests/test_runtime.py::test_advisory_fallback_does_not_replace_live_terminal_status -q
+uv run pytest tests/test_runtime.py::test_execution_failed_turn_does_not_use_thread_read_fallback tests/test_runtime.py::test_advisory_fallback_does_not_replace_live_terminal_status -q
 ```
 
 Expected: both tests pass.
@@ -1065,7 +1065,7 @@ Expected: both tests pass.
 Run:
 
 ```bash
-uv run pytest packages/plugins/codex-collaboration/tests/test_runtime.py -q
+uv run pytest tests/test_runtime.py -q
 ```
 
 Expected: all runtime tests pass.
@@ -1075,7 +1075,7 @@ Expected: all runtime tests pass.
 Commit message:
 
 ```bash
-git add packages/plugins/codex-collaboration/tests/test_runtime.py
+git add tests/test_runtime.py
 git commit -m "test: preserve thread read recovery boundary"
 ```
 
@@ -1168,7 +1168,7 @@ git commit -m "docs: narrow unsupported server request ticket"
 
 **Files:**
 
-- Read: `packages/plugins/codex-collaboration/server/runtime.py`
+- Read: `server/runtime.py`
 - Read: `docs/diagnostics/2026-05-01-codex-app-server-client-platform-exploration.md`
 - Verify or modify the Task 1 launcher posture text: `docs/diagnostics/2026-05-01-codex-app-server-client-platform-rebaseline-capabilities.md`
 - Verify or modify the Task 1 `launcher_posture` JSON object: `docs/diagnostics/codex-app-server-client-platform-rebaseline-capabilities.json`
@@ -1178,7 +1178,7 @@ git commit -m "docs: narrow unsupported server request ticket"
 Run:
 
 ```bash
-rg -n "def __init__\\(|command: list\\[str\\]|command or \\[\"codex\", \"app-server\"\\]" packages/plugins/codex-collaboration/server/runtime.py
+rg -n "def __init__\\(|command: list\\[str\\]|command or \\[\"codex\", \"app-server\"\\]" server/runtime.py
 ```
 
 Expected:
@@ -1219,7 +1219,7 @@ Ensure the capability JSON still contains exactly this top-level launcher postur
 Run:
 
 ```bash
-git diff -- packages/plugins/codex-collaboration/server/runtime.py
+git diff -- server/runtime.py
 ```
 
 Expected: no diff from this task.
@@ -1250,7 +1250,7 @@ If no files changed, record "Task 6 verified no code change" in the execution no
 Run:
 
 ```bash
-git status --short -- docs/diagnostics/2026-05-01-codex-app-server-client-platform-rebaseline-capabilities.md docs/diagnostics/codex-app-server-client-platform-rebaseline-capabilities.json docs/diagnostics/2026-05-01-codex-app-server-server-request-method-classification.md docs/diagnostics/codex-app-server-server-request-method-classification.json packages/plugins/codex-collaboration/tests/test_approval_router.py packages/plugins/codex-collaboration/tests/test_runtime.py docs/tickets/2026-04-29-codex-collaboration-unsupported-server-request-reachability.md
+git status --short -- docs/diagnostics/2026-05-01-codex-app-server-client-platform-rebaseline-capabilities.md docs/diagnostics/codex-app-server-client-platform-rebaseline-capabilities.json docs/diagnostics/2026-05-01-codex-app-server-server-request-method-classification.md docs/diagnostics/codex-app-server-server-request-method-classification.json tests/test_approval_router.py tests/test_runtime.py docs/tickets/2026-04-29-codex-collaboration-unsupported-server-request-reachability.md
 ```
 
 Expected: no output.
@@ -1328,7 +1328,7 @@ docs/plans/2026-05-01-codex-app-server-v128-stable-sandbox-policy-implementation
 Required scope:
 
 - update `build_workspace_write_sandbox_policy()`;
-- update `packages/plugins/codex-collaboration/tests/test_runtime.py`;
+- update `tests/test_runtime.py`;
 - preserve PR #127 / T-20260429-01 support-root and denial invariants;
 - prove current smoke and credential-boundary behavior.
 
@@ -1388,7 +1388,7 @@ The blocked artifact must name:
 Run:
 
 ```bash
-uv run pytest packages/plugins/codex-collaboration/tests/test_approval_router.py packages/plugins/codex-collaboration/tests/test_runtime.py -q
+uv run pytest tests/test_approval_router.py tests/test_runtime.py -q
 ```
 
 Expected: all selected tests pass.
@@ -1398,7 +1398,7 @@ Expected: all selected tests pass.
 Run:
 
 ```bash
-uv run pytest packages/plugins/codex-collaboration/tests/test_handler_branches_integration.py::test_unknown_kind_parse_failure_terminalizes_unknown packages/plugins/codex-collaboration/tests/test_handler_branches_integration.py::test_unknown_kind_unrecognized_method_lineage_status_is_unknown packages/plugins/codex-collaboration/tests/test_delegate_start_integration.py::test_e2e_command_approval_produces_escalation packages/plugins/codex-collaboration/tests/test_delegate_start_integration.py::test_e2e_unknown_request_kind_interrupts_and_escalates -q
+uv run pytest tests/test_handler_branches_integration.py::test_unknown_kind_parse_failure_terminalizes_unknown tests/test_handler_branches_integration.py::test_unknown_kind_unrecognized_method_lineage_status_is_unknown tests/test_delegate_start_integration.py::test_e2e_command_approval_produces_escalation tests/test_delegate_start_integration.py::test_e2e_unknown_request_kind_interrupts_and_escalates -q
 ```
 
 Expected: all selected tests pass.
@@ -1442,7 +1442,7 @@ Expected:
 Run:
 
 ```bash
-ruff check packages/plugins/codex-collaboration/server packages/plugins/codex-collaboration/tests
+ruff check server tests
 ```
 
 Expected: no new lint failures.

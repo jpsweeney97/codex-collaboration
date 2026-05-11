@@ -25,7 +25,7 @@ Rationale:
 Plugin ID: `codex-collaboration`
 
 ```text
-packages/plugins/codex-collaboration/
+
 ├── .claude-plugin/
 │   └── plugin.json
 ├── .mcp.json

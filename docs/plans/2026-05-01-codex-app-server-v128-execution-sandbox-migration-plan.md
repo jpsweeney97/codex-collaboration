@@ -163,29 +163,29 @@ Read and reference:
   - Stable vs experimental schema generation and `experimentalApi` runtime opt-in rules.
 - Pinned Codex App Server implementation for the selected artifact, or an equivalent local source snapshot
   - Trust persistence during `thread/start`, `PermissionProfileSelectionParams`, thread response permission-profile metadata, user-defined profile compilation, and legacy `readOnlyAccess` deserialization behavior.
-- `packages/plugins/codex-collaboration/server/runtime.py`
+- `server/runtime.py`
   - Current initialize payload, `build_workspace_write_sandbox_policy()`, and execution/advisory turn payload construction.
-- `packages/plugins/codex-collaboration/server/control_plane.py`
+- `server/control_plane.py`
   - Execution thread creation, runtime startup, and advisory/runtime separation.
-- `packages/plugins/codex-collaboration/server/delegation_controller.py`
+- `server/delegation_controller.py`
   - Worktree creation, execution runtime bootstrap, and `_execute_live_turn()` call site.
-- `packages/plugins/codex-collaboration/server/jsonrpc_client.py`
+- `server/jsonrpc_client.py`
   - JSON-RPC error capture and truncation behavior.
-- `packages/plugins/codex-collaboration/server/codex_compat.py`
+- `server/codex_compat.py`
   - Current tested/minimum version reporting.
-- `packages/plugins/codex-collaboration/tests/fixtures/codex-app-server/0.117.0/`
+- `tests/fixtures/codex-app-server/0.117.0/`
   - Existing fixture baseline for the old `readOnlyAccess` request shape.
 - `docs/status/codex-collaboration-reconciliation-register.md`
   - Current T-20260429-01 status and exit condition context.
 
 Create or update only after the relevant task says to:
-- `packages/plugins/codex-collaboration/tests/fixtures/codex-app-server/0.128.0/`
+- `tests/fixtures/codex-app-server/0.128.0/`
   - Generated stable and experimental `0.128.0` schema fixtures, if fixture vendoring is selected.
 - `docs/diagnostics/codex-app-server-v128-schema-runtime-decision.json`
   - Deterministic decision-packet artifact.
 - `docs/diagnostics/codex-app-server-v128-root-rejection.json`
   - Runtime proof for the stale current payload, if root reproduction is run separately.
-- `packages/plugins/codex-collaboration/scripts/probe_codex_v128_execution_sandbox.py`
+- `scripts/probe_codex_v128_execution_sandbox.py`
   - Probe runner, if the decision packet is automated in-repo rather than run as an external scratch script.
 
 ## Diagnostic Artifact Schema

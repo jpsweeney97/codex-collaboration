@@ -6,7 +6,7 @@
 
 **Architecture:** Use a fresh scratch `CODEX_HOME`, a raw JSON-RPC harness that separates server requests from notifications, and a two-gate flow: first establish scratch auth without copying operator-home credentials, then run one deliberately request-producing turn while refusing to approve side effects unless a separate response policy is explicitly authorized.
 
-**Tech Stack:** Python 3 standard library, Codex App Server JSON-RPC over stdio, `codex app-server` 0.128.0, generated stable/experimental schemas under `/private/tmp/codex-app-server-exploration`, existing local compatibility code under `packages/plugins/codex-collaboration/server/`.
+**Tech Stack:** Python 3 standard library, Codex App Server JSON-RPC over stdio, `codex app-server` 0.128.0, generated stable/experimental schemas under `/private/tmp/codex-app-server-exploration`, existing local compatibility code under `server/`.
 
 ---
 
@@ -43,10 +43,10 @@ Read first:
 - `docs/plans/2026-05-01-codex-app-server-materialized-thread-and-server-request-probe-plan.md`
 - `docs/plans/2026-05-01-codex-app-server-v128-execution-sandbox-migration-plan.md`
 - `docs/architecture/2026-05-01-codex-app-server-v128-permission-architecture-implications.md`
-- `packages/plugins/codex-collaboration/server/approval_router.py`
-- `packages/plugins/codex-collaboration/server/delegation_controller.py`
-- `packages/plugins/codex-collaboration/server/models.py`
-- `packages/plugins/codex-collaboration/server/pending_request_store.py`
+- `server/approval_router.py`
+- `server/delegation_controller.py`
+- `server/models.py`
+- `server/pending_request_store.py`
 
 Use these scratch/source inputs when present:
 
@@ -621,10 +621,10 @@ Expected:
 ## Task 7: Classify Envelope Compatibility
 
 **Files:**
-- Read: `packages/plugins/codex-collaboration/server/approval_router.py`
-- Read: `packages/plugins/codex-collaboration/server/delegation_controller.py`
-- Read: `packages/plugins/codex-collaboration/server/models.py`
-- Read: `packages/plugins/codex-collaboration/server/pending_request_store.py`
+- Read: `server/approval_router.py`
+- Read: `server/delegation_controller.py`
+- Read: `server/models.py`
+- Read: `server/pending_request_store.py`
 - Read: `/private/tmp/codex-app-server-exploration/schemas/codex-cli-app-server/experimental/ServerRequest.json`
 - Modify: `docs/diagnostics/codex-app-server-server-request-envelope-probes.json`
 - Modify: `docs/diagnostics/2026-05-01-codex-app-server-server-request-envelope-probes.md`

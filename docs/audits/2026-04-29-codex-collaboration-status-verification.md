@@ -36,7 +36,7 @@ Direct ticket-frontmatter reads:
 ### From `codex-collaboration-current-state.md`
 
 - `Claim`: 10 MCP tools listed under "Implemented Now" (lines 53-62)
-  - `Evidence`: `packages/plugins/codex-collaboration/server/mcp_server.py:18-187` `TOOL_DEFINITIONS` registers exactly the 10 named tools (`codex.status`, `codex.consult`, `codex.dialogue.start|reply|read`, `codex.delegate.start|poll|promote|discard|decide`).
+  - `Evidence`: `server/mcp_server.py:18-187` `TOOL_DEFINITIONS` registers exactly the 10 named tools (`codex.status`, `codex.consult`, `codex.dialogue.start|reply|read`, `codex.delegate.start|poll|promote|discard|decide`).
   - `Why sufficient`: One-for-one match with no extras and no omissions.
 
 - `Claim`: "dialogue is durable but does not currently expose `codex.dialogue.fork`" (line 76)
@@ -48,7 +48,7 @@ Direct ticket-frontmatter reads:
   - `Why sufficient`: Direct source-code verification.
 
 - `Claim`: Authority Owners table (lines 36-46)
-  - `Evidence`: `docs/superpowers/specs/codex-collaboration/spec.yaml:4-59` defines exactly the 8 authorities mapped in the table.
+  - `Evidence`: `docs/specs/spec.yaml:4-59` defines exactly the 8 authorities mapped in the table.
   - `Why sufficient`: Owner classes and primary-artifact mapping verifiable against the manifest.
 
 - `Claim`: Status-Layer Conventions (lines 117-126)
@@ -104,7 +104,7 @@ Direct ticket-frontmatter reads:
   - `Why sufficient`: Frontmatter-level verification of closure plus location for all three.
 
 - `Claim` D-06: `/delegate` skill promises file-change visibility the runtime does not provide
-  - `Evidence`: `packages/plugins/codex-collaboration/skills/delegate/SKILL.md:195` says `file_change` rendering shows "the file path and change type"; T-20260429-01's owning ticket and the register row both document empty `requested_scope` for `file_change` in current runtime behavior.
+  - `Evidence`: `skills/delegate/SKILL.md:195` says `file_change` rendering shows "the file path and change type"; T-20260429-01's owning ticket and the register row both document empty `requested_scope` for `file_change` in current runtime behavior.
   - `Why sufficient`: Skill text and ticket-recorded operational reality contradict.
 
 - `Claim` D-07: Audit schema / docs / emission diverge
@@ -116,7 +116,7 @@ Direct ticket-frontmatter reads:
   - `Why sufficient`: Field-by-field comparison shows three independent mismatches.
 
 - `Claim` D-08: Package README understates the live skill surface
-  - `Evidence`: `packages/plugins/codex-collaboration/README.md:54-58` lists exactly two skills (`codex-status`, `consult-codex`); the `skills/` directory contains 8 (`codex-analytics`, `codex-review`, `codex-status`, `consult-codex`, `delegate`, `dialogue`, `dialogue-codex`, `shakedown-b1`); 7 have `user-invocable: true` frontmatter.
+  - `Evidence`: `README.md:54-58` lists exactly two skills (`codex-status`, `consult-codex`); the `skills/` directory contains 8 (`codex-analytics`, `codex-review`, `codex-status`, `consult-codex`, `delegate`, `dialogue`, `dialogue-codex`, `shakedown-b1`); 7 have `user-invocable: true` frontmatter.
   - `Why sufficient`: Directory listing + frontmatter prove README omits at least 5 user-invocable skills.
   - `Note on relationship to drift-report skill enumeration falsehood`: D-08 remains true as a README-understatement finding. The drift report's *own* skill count (Section 3 line 40 / Section 4 line 52) is a separate falsehood — see "Verified FALSE" below — which must be corrected upward to 7 user-invocable + 1 non-user-invocable. The two findings are related but distinct: D-08 is about the package README; the falsehood is about the drift report's project-expertise map.
 
@@ -127,7 +127,7 @@ Direct ticket-frontmatter reads:
 ## Verified FALSE
 
 - `Claim` (drift report Section 3 line 40 / Section 4 line 52): "package ships user-invocable `consult-codex`, `delegate`, `codex-status`, `codex-review`, and `codex-analytics`, plus a non-user-invocable `dialogue-codex` verification skill"
-  - `Contradicting evidence`: `skills/dialogue/SKILL.md:1-7` declares `name: dialogue, user-invocable: true`; `skills/shakedown-b1/SKILL.md:1-6` declares `name: shakedown-b1, user-invocable: true`. Both skill trees exist at snapshot `88f098a1` per `git ls-tree 88f098a1 -- packages/plugins/codex-collaboration/skills/`; both predate the snapshot (first added in commits `05b7db3a` and `5a4b75b4` respectively). The undercount is wrong at both frames.
+  - `Contradicting evidence`: `skills/dialogue/SKILL.md:1-7` declares `name: dialogue, user-invocable: true`; `skills/shakedown-b1/SKILL.md:1-6` declares `name: shakedown-b1, user-invocable: true`. Both skill trees exist at snapshot `88f098a1` per `git ls-tree 88f098a1 -- skills/`; both predate the snapshot (first added in commits `05b7db3a` and `5a4b75b4` respectively). The undercount is wrong at both frames.
   - `Corrected truth`: The package ships 7 user-invocable skills (`codex-analytics`, `codex-review`, `codex-status`, `consult-codex`, `delegate`, `dialogue`, `shakedown-b1`) plus 1 non-user-invocable (`dialogue-codex`).
 
 ## Snapshot-True, Stale In Saved Artifact

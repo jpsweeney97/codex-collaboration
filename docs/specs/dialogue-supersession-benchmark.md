@@ -78,10 +78,10 @@ during a benchmark run.
 
 | ID | Type | Posture | Turn Budget | Prompt | Primary evidence anchors |
 |----|------|---------|-------------|--------|--------------------------|
-| B1 | Architecture review | evaluative | 6 | Is the codex-collaboration MCP tool surface aligned with the normative spec, and what tools are still missing for full completion? | `docs/superpowers/specs/codex-collaboration/contracts.md`, `docs/superpowers/specs/codex-collaboration/delivery.md`, `packages/plugins/codex-collaboration/server/mcp_server.py` |
-| B3 | Code review | adversarial | 6 | Review the current context assembly redaction implementation for remaining coverage gaps or false-positive risks that still matter for Codex prompt safety. | `packages/plugins/codex-collaboration/server/context_assembly.py`, `packages/plugins/codex-collaboration/tests/test_context_assembly.py`, `docs/tickets/2026-03-30-context-assembly-redaction-hardening.md` |
-| B5 | Policy audit | evaluative | 6 | Is the advisory runtime rotation model specified strongly enough for privilege widening and narrowing, or where are the weak points? | `docs/superpowers/specs/codex-collaboration/advisory-runtime-policy.md`, `packages/plugins/codex-collaboration/server/control_plane.py`, `packages/plugins/codex-collaboration/server/runtime.py` |
-| B8 | Supersession analysis | comparative | 8 | Can Claude-side scouting replace cross-model context-injection for dialogue in this repo, or what concrete quality loss would remain? | `packages/plugins/cross-model/skills/dialogue/SKILL.md`, `packages/plugins/cross-model/agents/`, `packages/plugins/cross-model/context-injection/`, `docs/superpowers/specs/codex-collaboration/`, `packages/plugins/codex-collaboration/server/` |
+| B1 | Architecture review | evaluative | 6 | Is the codex-collaboration MCP tool surface aligned with the normative spec, and what tools are still missing for full completion? | `docs/specs/contracts.md`, `docs/specs/delivery.md`, `server/mcp_server.py` |
+| B3 | Code review | adversarial | 6 | Review the current context assembly redaction implementation for remaining coverage gaps or false-positive risks that still matter for Codex prompt safety. | `server/context_assembly.py`, `tests/test_context_assembly.py`, `docs/tickets/2026-03-30-context-assembly-redaction-hardening.md` |
+| B5 | Policy audit | evaluative | 6 | Is the advisory runtime rotation model specified strongly enough for privilege widening and narrowing, or where are the weak points? | `docs/specs/advisory-runtime-policy.md`, `server/control_plane.py`, `server/runtime.py` |
+| B8 | Supersession analysis | comparative | 8 | Can Claude-side scouting replace cross-model context-injection for dialogue in this repo, or what concrete quality loss would remain? | `packages/plugins/cross-model/skills/dialogue/SKILL.md`, `packages/plugins/cross-model/agents/`, `packages/plugins/cross-model/context-injection/`, `docs/specs/`, `server/` |
 
 Rows `B2`, `B4`, `B6`, and `B7` are deferred from benchmark v1. They may be
 restored only through contract amendment under [Change Control](#change-control).
@@ -117,9 +117,9 @@ search. It is scored only through the anchored decomposition below:
    `packages/plugins/cross-model/agents/`, and
    `packages/plugins/cross-model/context-injection/`
 2. Candidate normative design surface:
-   `docs/superpowers/specs/codex-collaboration/`
+   `docs/specs/`
 3. Candidate implemented runtime surface:
-   `packages/plugins/codex-collaboration/server/`
+   `server/`
 
 The final synthesis may answer whether Claude-side scouting can replace
 context-injection, but each `Glob`/`Grep`/`Read` step MUST stay anchored to one

@@ -75,8 +75,8 @@ separate subpaths).
 
 | File | Change |
 |------|--------|
-| `packages/plugins/codex-collaboration/server/runtime.py` | Extend `build_workspace_write_sandbox_policy()` |
-| `packages/plugins/codex-collaboration/tests/test_runtime.py` | Update regression assertion; add Option E tests |
+| `server/runtime.py` | Extend `build_workspace_write_sandbox_policy()` |
+| `tests/test_runtime.py` | Update regression assertion; add Option E tests |
 | `docs/tickets/2026-04-29-codex-collaboration-delegation-friction-reduction.md` | Add `~/.agents/` as Friction surface 1b |
 
 `delegation_controller.py:1370` passes `worktree_path` through
@@ -257,7 +257,7 @@ closeout) and depend on live App Server availability.
    file, missing file
 3. Verify the existing regression test expects the updated
    `readableRoots` shape (5 static entries, no gitdir)
-4. `rg "readableRoots" packages/plugins/codex-collaboration/` — confirm
+4. `rg "readableRoots" ` — confirm
    no other test or source file asserts the old shape
 5. Verify `T-20260429-01` has been updated with the `~/.agents/`
    scope amendment before the implementation commit

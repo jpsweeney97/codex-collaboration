@@ -33,7 +33,7 @@ When recording drift findings or reconciliation items, use separate fields:
 - `evidence_basis` (recommended)
 
 `authority_owner` MUST use the real owner set from
-`docs/superpowers/specs/codex-collaboration/spec.yaml`:
+`docs/specs/spec.yaml`:
 
 - `foundation`
 - `contracts`
@@ -71,7 +71,7 @@ back to owning artifacts:
 
 The owner model for behavioral truth already exists in the spec authority map:
 
-- `docs/superpowers/specs/codex-collaboration/spec.yaml:4-99`
+- `docs/specs/spec.yaml:4-99`
 
 The missing piece is reader topology:
 

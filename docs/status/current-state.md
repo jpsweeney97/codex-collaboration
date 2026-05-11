@@ -18,9 +18,9 @@ artifacts win.
 - **Current state / project orientation:** this document
 - **Open or unreconciled work:** [codex-collaboration reconciliation register](./codex-collaboration-reconciliation-register.md)
 - **Behavioral truth / contract ownership:** the owner documents under
-  `docs/superpowers/specs/codex-collaboration/`, per the authority map in
+  `docs/specs/`, per the authority map in
   [`spec.yaml`](../superpowers/specs/codex-collaboration/spec.yaml)
-- **Implementation truth:** `packages/plugins/codex-collaboration/` code and tests
+- **Implementation truth:** `` code and tests
 - **Supporting audit evidence:** diagnostics, closed-ticket closeout evidence, and
   assessment-layer documents
 
@@ -31,7 +31,7 @@ current code together.
 ## Authority Owners
 
 Behavioral claim ownership comes from
-[`docs/superpowers/specs/codex-collaboration/spec.yaml`](../superpowers/specs/codex-collaboration/spec.yaml).
+[`docs/specs/spec.yaml`](../superpowers/specs/codex-collaboration/spec.yaml).
 
 | Authority owner | Owns | Primary artifact(s) |
 |---|---|---|
@@ -80,10 +80,10 @@ At a high level:
 
 For implementation details, start from:
 
-- `packages/plugins/codex-collaboration/server/mcp_server.py`
-- `packages/plugins/codex-collaboration/server/dialogue.py`
-- `packages/plugins/codex-collaboration/server/delegation_controller.py`
-- `packages/plugins/codex-collaboration/server/runtime.py`
+- `server/mcp_server.py`
+- `server/dialogue.py`
+- `server/delegation_controller.py`
+- `server/runtime.py`
 
 ## Intentionally Deferred Or Not Yet Implemented
 

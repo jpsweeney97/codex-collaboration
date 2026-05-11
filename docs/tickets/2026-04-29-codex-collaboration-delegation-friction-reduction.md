@@ -65,7 +65,7 @@ credential paths.
 
 ### Implementation
 
-In `packages/plugins/codex-collaboration/server/runtime.py:46-57`, extend
+In `server/runtime.py:46-57`, extend
 `readableRoots` with two specific subpaths only:
 
 - `Path.home() / ".codex" / "memories"`
@@ -288,9 +288,9 @@ Classify escalation causes in the smoke record:
 
 | Surface | File | Line |
 |---|---|---|
-| Sandbox policy builder | `packages/plugins/codex-collaboration/server/runtime.py` | 23-58 |
-| Sandbox policy regression test | `packages/plugins/codex-collaboration/tests/test_runtime.py` | 178 |
-| App Server response handler (file_change) | `packages/plugins/codex-collaboration/server/approval_router.py` | 58-60 |
-| Escalation projection (file_change) | `packages/plugins/codex-collaboration/server/delegation_controller.py` | 1809-1812 |
-| Vendored App Server schemas | `packages/plugins/codex-collaboration/tests/fixtures/codex-app-server/0.117.0/` | (file_change shape) |
+| Sandbox policy builder | `server/runtime.py` | 23-58 |
+| Sandbox policy regression test | `tests/test_runtime.py` | 178 |
+| App Server response handler (file_change) | `server/approval_router.py` | 58-60 |
+| Escalation projection (file_change) | `server/delegation_controller.py` | 1809-1812 |
+| Vendored App Server schemas | `tests/fixtures/codex-app-server/0.117.0/` | (file_change shape) |
 | Diagnostic record (Candidate A) | `docs/diagnostics/2026-04-28-delegate-execution-diagnostic.md` | (security probe pattern reusable here) |

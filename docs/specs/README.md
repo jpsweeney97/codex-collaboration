@@ -57,7 +57,7 @@ Official plugin comparison is pinned to upstream commit `9cb4fe4`. If upstream c
   is a draft, non-normative session-derived evidence map for selected deltas
   between the vendored `codex-cli 0.117.0` schema fixture and a locally
   generated App Server schema from `codex-cli 0.125.0`. Its comparison logic
-  lives in `packages/plugins/codex-collaboration/scripts/compare_app_server_schemas.py`,
+  lives in `scripts/compare_app_server_schemas.py`,
   with a generated report under `evidence/`. Current unsupported server-request
   reachability is tracked separately by
   [T-20260429-02](../../../tickets/2026-04-29-codex-collaboration-unsupported-server-request-reachability.md).

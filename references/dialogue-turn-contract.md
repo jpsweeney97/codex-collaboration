@@ -2,7 +2,7 @@
 title: "Dialogue Turn Contract"
 type: reference
 authority: production-local
-source: packages/plugins/codex-collaboration/skills/dialogue-codex/SKILL.md
+source: skills/dialogue-codex/SKILL.md
 extracted_at: 2026-04-14
 plan: docs/plans/2026-04-13-t04-v1-production-dialogue-scoping-plan.md
 ---

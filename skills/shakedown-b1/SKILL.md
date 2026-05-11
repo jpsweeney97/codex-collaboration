@@ -69,13 +69,13 @@ Write `seed-<run_id>.json`:
   "session_id": "<session_id>",
   "run_id": "<run_id>",
   "file_anchors": [
-    "<repo_root>/docs/superpowers/specs/codex-collaboration/contracts.md",
-    "<repo_root>/docs/superpowers/specs/codex-collaboration/delivery.md",
-    "<repo_root>/packages/plugins/codex-collaboration/server/mcp_server.py"
+    "<repo_root>/docs/specs/contracts.md",
+    "<repo_root>/docs/specs/delivery.md",
+    "<repo_root>/server/mcp_server.py"
   ],
   "scope_directories": [
-    "<repo_root>/docs/superpowers/specs/codex-collaboration/",
-    "<repo_root>/packages/plugins/codex-collaboration/server/"
+    "<repo_root>/docs/specs/",
+    "<repo_root>/server/"
   ],
   "created_at": "<ISO timestamp>"
 }

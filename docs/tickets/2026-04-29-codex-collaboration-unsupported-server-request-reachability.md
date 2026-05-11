@@ -29,7 +29,7 @@ these methods do not have the context fields the parser currently requires.
 The selected `0.117.0` to `0.125.0` schema delta evidence map records this as
 latent current-runtime debt, not only future pin-update work:
 
-- `docs/superpowers/specs/codex-collaboration/2026-04-29-codex-app-server-0.125.0-schema-delta.md`
+- `docs/specs/2026-04-29-codex-app-server-0.125.0-schema-delta.md`
 
 ## Current Runtime Behavior
 
