@@ -1,0 +1,5 @@
+{
+  "env": {
+    "GITFLOW_ALLOW_FILES": "**/docs/**,**/tickets/**,CHANGELOG.md,README.md,AGENTS.md,**/CLAUDE.md,.gitignore,.claude/settings.json,.claude-plugin/plugin.json,.mcp.json,pyproject.toml"
+  }
+}
