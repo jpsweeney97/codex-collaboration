@@ -23,26 +23,27 @@ After this slice lands, the following hold:
 
 - `audit/events.jsonl` and `analytics/outcomes.jsonl` are pruned at plugin startup. Records with parseable timezone-aware ISO 8601 timestamps older than 30 days from the current time are dropped.
 - Outcomes (`analytics/outcomes.jsonl`) are treated in this slice as **operational diagnostics with a 30-day operational horizon**, not as long-term analytics history. This is an explicit data-class decision: if a future feature consumes outcomes for long-term analytics, a separate retention class must be introduced **before** the consuming feature ships. Records dropped by this slice's prune are not recoverable.
-- Pruning is a pure filter: retained records are written back as their original raw lines, byte-for-byte, never re-serialized.
+- Pruning is a pure filter: retained record bytes are preserved, with a single `\n` appended to the final retained line if absent (to keep the file JSONL-append-safe for the next `append_*` call). Records are never re-serialized through `json.dumps`.
 - Records with missing, non-string, unparseable, or timezone-naive `timestamp` fields are retained (retain-on-uncertainty principle — ambiguous records are not silently erased). These records are **TTL-exempt by design**: the 30-day TTL applies only to records with parseable, timezone-aware timestamps, so a sufficiently corrupt audit or outcome line can survive past the 30-day window indefinitely. `PruneSummary.audit_retained_malformed` and `PruneSummary.outcomes_retained_malformed` count these records each pass; they share the observability conditional described in the bootstrap bullet below.
 - Records that fail to parse as JSON, or parse as non-dict shapes, are retained as raw lines.
 - Blank lines are removed during pruning (not records; not subject to retain-on-uncertainty).
 - The three `append_*_once` methods consult an in-memory dedup set keyed on natural fields. Set membership replaces the previous linear file scan. Sets are atomically rebuilt during prune and atomically loaded on first direct-construction use.
 - A clock seam (`OperationJournal(..., clock=Callable[[], datetime])`) governs every "now" the journal uses. Naive clock outputs fail fast with `ValueError`. Production code does not pass concrete `now=` values; tests inject fake clocks.
 - Atomic file replacement guarantees: target file untouched on pre-replace failure; POSIX-atomic swap on `os.replace` success. Does *not* directory-fsync — post-rename durability across power-fail is not asserted, matching the existing `compact()` and `_write_markers` pattern.
-- **Atomicity is per file, not pair-wise.** A successful prune of `events.jsonl` followed by a failed prune of `outcomes.jsonl` leaves the canonical files in a mixed-prune state. Both files are independent retention surfaces; the next startup re-runs the full prune. Append correctness is preserved across the mixed state because `_ensure_seen_sets_loaded()` reads disk as the source of truth when the in-memory atomic swap is skipped.
+- **Atomicity is per file, not pair-wise.** A successful prune of `events.jsonl` followed by a failed prune of `outcomes.jsonl` leaves the canonical files in a mixed-prune state. Both files are independent retention surfaces; the next startup re-runs the full prune. **Seen-set loading is per source file**, not journal-wide: `_ensure_audit_seen_loaded()` depends only on `events.jsonl` readability, and `_ensure_outcomes_seen_loaded()` depends only on `outcomes.jsonl` readability. After a partial-failure prune, each `append_*_once` reloads only its own file's seen-set from disk. Audit appends do not share fate with outcomes appends, and vice versa.
+- **File-level encoding is UTF-8 by construction.** An invalid UTF-8 byte sequence in a prune-target file is treated as **file-level corruption** and is fatal to that file's prune pass (`UnicodeDecodeError` propagates). This is *not* retain-on-uncertainty: retain-on-uncertainty applies at JSONL-record granularity, not byte granularity. Bootstrap catches `UnicodeDecodeError` alongside `OSError` and warns; the JSONL-line-level `json.JSONDecodeError` is *not* in this catch list because malformed records are line-local retained data, not corruption.
 - **Single-writer assumption.** Exactly one MCP process owns a given `plugin_data_path` at a time. Concurrent prune from two processes against the same data directory is undefined and unsupported — the fixed-suffix temp file `<path>.tmp` would collide. This matches the existing `compact()` and `_write_markers` patterns in `OperationJournal`.
-- The plugin bootstrap invokes pruning. Prune failure (`OSError`) invokes `logger.warning(..., exc_info=True)` and does not block startup. **Warning-level output reaches stderr via Python's `logging.lastResort` handler (the unconfigured-logger fallback), so the failure signal is observable to whoever sees the MCP server's stderr unless the host suppresses it.** The success-summary call (`logger.info(...)` in §6.1) is below the lastResort threshold and is discarded by Python's default logging configuration; operator visibility into success metrics requires F18 (or `caplog` in tests). Append correctness is preserved through `_ensure_seen_sets_loaded()` regardless of logging state.
+- The plugin bootstrap invokes pruning. Prune failure (`OSError` or `UnicodeDecodeError`) invokes `logger.warning(..., exc_info=True)` and does not block startup. **Warning-level output reaches stderr via Python's `logging.lastResort` handler (the unconfigured-logger fallback), so the failure signal is observable to whoever sees the MCP server's stderr unless the host suppresses it.** The success-summary call is at `INFO` (discarded by Python's default logging configuration) **when both `retained_malformed` counts are zero**, and is **escalated to `WARNING` when either count is nonzero** — so the silent-accumulation case has default operator visibility before F18 lands. Routine success metrics still require F18 (or `caplog` in tests). Append correctness is preserved through `_ensure_audit_seen_loaded()` / `_ensure_outcomes_seen_loaded()` regardless of logging state.
 
 ## 3. Scope
 
 ### In
 
 - Pruning for `audit/events.jsonl` and `analytics/outcomes.jsonl` at startup.
-- Replacement of linear `_jsonl_contains` dedup with in-memory seen-sets.
+- Replacement of linear `_jsonl_contains` dedup with in-memory seen-sets (per-source-file initialization — see §5.7).
 - Clock seam added to `OperationJournal` constructor.
-- Spec amendments to `docs/specs/recovery-and-journal.md` §Audit Log → Retention and §Retention Defaults.
-- New tests in `tests/test_journal.py` covering all pruning, dedup, atomic-rewrite, and bootstrap-integration invariants.
+- Spec amendments to `docs/specs/recovery-and-journal.md`: §Two-Log Architecture table retention row, new §Operational Outcomes subsection, §Audit Log → Retention subsection rewrite, and §Retention Defaults table.
+- New tests in `tests/test_journal.py` (journal-internal: pruning, dedup, atomic-rewrite, per-file lifecycle) and `tests/test_bootstrap.py` (§8.9 bootstrap-integration invariants).
 - Migration of any existing tests that exercised `_jsonl_contains` semantics.
 
 ### Out (deferred)
@@ -110,7 +111,13 @@ def __init__(
 ) -> None:
     # ... existing path setup unchanged ...
     self._clock = clock or (lambda: datetime.now(UTC))
-    self._seen_sets_initialized = False
+    # Two flags, one per source file. Audit appends depend only on
+    # _audit_seen_initialized; outcomes appends (dialogue + delegation,
+    # both stored in outcomes.jsonl) depend only on _outcomes_seen_initialized.
+    # This decoupling is load-bearing: an unreadable outcomes.jsonl must not
+    # block audit appends.
+    self._audit_seen_initialized = False
+    self._outcomes_seen_initialized = False
     self._audit_seen: set[_AuditDedupKey] = set()
     self._dialogue_outcomes_seen: set[_DialogueOutcomeDedupKey] = set()
     self._delegation_outcomes_seen: set[_DelegationOutcomeDedupKey] = set()
@@ -148,20 +155,22 @@ def append_dialogue_audit_event_once(self, event: AuditEvent) -> None:
     """Append unless the logical record already exists.
 
     Invariants:
-      - Calls _ensure_seen_sets_loaded() before the dedup check; direct-
-        construction paths get correct dedup automatically.
+      - Calls _ensure_audit_seen_loaded() before the dedup check (per-file
+        load: only events.jsonl is read). Direct-construction paths get
+        correct dedup automatically without coupling to outcomes.jsonl.
       - The seen-set is updated only after append_audit_event() succeeds.
         If append raises, the key is not added so a retry can still write.
     """
 ```
 
-Same invariant for `append_dialogue_outcome_once` and `append_delegation_outcome_once`.
+Same shape for `append_dialogue_outcome_once` and `append_delegation_outcome_once`, except both call `_ensure_outcomes_seen_loaded()` (per-file load: only outcomes.jsonl is read).
 
 ### Private methods
 
-- `_ensure_seen_sets_loaded()` — populate from on-disk files without rewriting. Atomic rebuild semantics (local sets, assigned only on full success). Does not flip `_seen_sets_initialized` if either file's population raises.
+- `_ensure_audit_seen_loaded()` — populate `_audit_seen` from `events.jsonl` without rewriting. Atomic rebuild semantics (local set, assigned only on success). Does not flip `_audit_seen_initialized` if population raises.
+- `_ensure_outcomes_seen_loaded()` — populate both `_dialogue_outcomes_seen` and `_delegation_outcomes_seen` from `outcomes.jsonl` in a single read pass (one disk read, two sets). Does not flip `_outcomes_seen_initialized` if population raises.
 - `_prune_jsonl_pass(*, path, cutoff, populate)` — single linear scan; produces retained raw lines and per-file stats.
-- `_populate_seen_from_file(path, on_record)` — read-only population helper used by `_ensure_seen_sets_loaded`.
+- `_populate_seen_from_file(path, on_record)` — read-only population helper used by the two `_ensure_*_seen_loaded` methods.
 - `_parse_aware_iso8601(value: Any) -> datetime | None` — strict timestamp parser.
 - `_populate_from_audit_record(record, audit_seen)` — module-level helper; adds the dedup key to `audit_seen` if the record has all comparable-key fields.
 - `_populate_from_outcome_record(record, dialogue_seen, delegation_seen)` — module-level helper; dispatches on `outcome_type` to populate the right outcomes set.
@@ -257,11 +266,14 @@ def prune_audit_logs(self, now: datetime | None = None) -> PruneSummary:
     )
     cutoff = now - timedelta(days=_AUDIT_TTL_DAYS)
 
-    # Invalidate seen-set initialization before any disk mutation. If any
-    # prune pass raises after we've started rewriting files, the flag stays
-    # False and the next append_*_once triggers a fresh read from disk —
-    # load-bearing for re-runnable prune on an already-initialized journal.
-    self._seen_sets_initialized = False
+    # Invalidate BOTH per-file flags before any disk mutation. Each is
+    # restored independently after its file's seen-set is atomically
+    # reassigned. A partial failure on outcomes leaves _audit_seen_initialized
+    # restored to True (audit pass succeeded) but _outcomes_seen_initialized
+    # still False, so the next outcomes append reloads from disk while audit
+    # appends remain served from in-memory state.
+    self._audit_seen_initialized = False
+    self._outcomes_seen_initialized = False
 
     new_audit_seen: set[_AuditDedupKey] = set()
     new_dialogue_outcomes_seen: set[_DialogueOutcomeDedupKey] = set()
@@ -272,6 +284,11 @@ def prune_audit_logs(self, now: datetime | None = None) -> PruneSummary:
         cutoff=cutoff,
         populate=lambda r: _populate_from_audit_record(r, new_audit_seen),
     )
+    # Atomic per-file commit: audit seen-set assigned and flag restored
+    # immediately after its pass completes. Independent of outcomes.
+    self._audit_seen = new_audit_seen
+    self._audit_seen_initialized = True
+
     outcomes_stats = self._prune_jsonl_pass(
         path=self._outcomes_path,
         cutoff=cutoff,
@@ -279,12 +296,11 @@ def prune_audit_logs(self, now: datetime | None = None) -> PruneSummary:
             r, new_dialogue_outcomes_seen, new_delegation_outcomes_seen,
         ),
     )
-
-    # Atomic assignment — only after both files completed without raising.
-    self._audit_seen = new_audit_seen
+    # Atomic per-file commit: both outcomes seen-sets assigned and flag
+    # restored after the single outcomes pass completes.
     self._dialogue_outcomes_seen = new_dialogue_outcomes_seen
     self._delegation_outcomes_seen = new_delegation_outcomes_seen
-    self._seen_sets_initialized = True
+    self._outcomes_seen_initialized = True
 
     return PruneSummary(
         audit_retained=audit_stats.retained,
@@ -296,11 +312,17 @@ def prune_audit_logs(self, now: datetime | None = None) -> PruneSummary:
     )
 ```
 
-If `_prune_jsonl_pass` for `outcomes.jsonl` raises after `events.jsonl` has been successfully replaced, the journal's in-memory seen-sets are *not* reassigned (the `self._audit_seen = new_audit_seen` lines are unreached) **and** the `_seen_sets_initialized` flag — cleared at prune entry — is not restored to `True`. On disk, `events.jsonl` reflects the prune; `outcomes.jsonl` is untouched. The next `append_*_once` consults `_ensure_seen_sets_loaded()`, which (because the flag is now `False`) reads disk as the source of truth and populates from the mixed state correctly. The next prune cycle re-runs both files. This per-file-not-pair-wise transaction boundary is named in §2 Contract; the flag-clear-at-entry discipline is what keeps the boundary correct when prune is re-run on a journal whose seen-sets were previously initialized — without it, stale in-memory keys could silently skip valid appends.
+**Failure narrative — outcomes pass fails after audit pass succeeds.** If `_prune_jsonl_pass` for `outcomes.jsonl` raises after `events.jsonl` has been successfully replaced and the audit seen-set has been committed, the journal's in-memory state shows: `_audit_seen_initialized == True` (audit pass committed); `_outcomes_seen_initialized == False` (cleared at entry, never restored because the outcomes commit lines are unreached). On disk, `events.jsonl` reflects the prune; `outcomes.jsonl` is untouched. The next `append_dialogue_audit_event_once` is served directly from the in-memory audit seen-set — no disk reload needed because the audit pass succeeded. The next `append_dialogue_outcome_once` or `append_delegation_outcome_once` consults `_ensure_outcomes_seen_loaded()`, which (because `_outcomes_seen_initialized == False`) reads `outcomes.jsonl` and populates both outcomes seen-sets from the untouched file. **Audit appends do not share fate with outcomes IO.**
+
+**Failure narrative — audit pass fails first.** If `_prune_jsonl_pass` for `events.jsonl` raises, both flags remain `False` (cleared at entry, never restored), the outcomes pass is unreached, and both files on disk are unchanged. The next `append_dialogue_audit_event_once` reloads `events.jsonl` via `_ensure_audit_seen_loaded()`; outcomes appends reload `outcomes.jsonl` via `_ensure_outcomes_seen_loaded()`. Both files are eligible for prune retry on the next call to `prune_audit_logs()`.
+
+This per-file-not-pair-wise transaction boundary is named in §2 Contract; the **per-file flag-clear-at-entry discipline** is what keeps the boundary correct when prune is re-run on a journal whose seen-sets were previously initialized — without per-file flag invalidation, stale in-memory keys could silently skip valid appends after a partial-failure re-run.
+
+**Invalid UTF-8 is file-level corruption.** The `with path.open(encoding="utf-8") as handle:` block uses Python's default `errors="strict"`. An invalid UTF-8 byte sequence raises `UnicodeDecodeError` during the linear scan, aborting that file's prune pass. This is the intended behavior: the file format is UTF-8 by construction (every `append_*` writer uses `encoding="utf-8"`), so an invalid byte sequence indicates corruption at a granularity below the JSONL-record boundary. Retain-on-uncertainty does not apply — it is a record-level discipline, not a byte-level one. The exception propagates to the orchestrator (and from there to bootstrap), where it is caught alongside `OSError` (§6.1) and surfaced as a `WARNING`. The other file is unaffected if the audit pass succeeded before the outcomes pass raised. `json.JSONDecodeError` is **not** in this fatal-pass class because malformed-JSON records are line-local retained data (per the §5.3 retain-on-uncertainty table).
 
 ### 5.2a Population helpers
 
-The `populate` callback used by `_prune_jsonl_pass` (and the equivalent reader path in `_ensure_seen_sets_loaded`) is one of two module-level free functions:
+The `populate` callback used by `_prune_jsonl_pass` (and the equivalent reader path in `_ensure_audit_seen_loaded` / `_ensure_outcomes_seen_loaded`) is one of two module-level free functions:
 
 ```python
 def _populate_from_audit_record(
@@ -400,30 +422,51 @@ This guarantee does **not** include directory-fsync after `os.replace`. Post-ren
 
 ### 5.6 Atomic seen-set rebuild
 
-Both `prune_audit_logs` and `_ensure_seen_sets_loaded` follow the rebuild-and-swap pattern: local sets are constructed during the pass, and `self._audit_seen` / `self._dialogue_outcomes_seen` / `self._delegation_outcomes_seen` are reassigned only after the full pass succeeds.
+Both `prune_audit_logs` and the two `_ensure_*_seen_loaded` methods follow the rebuild-and-swap pattern: local sets are constructed during the pass, and the corresponding `self._*_seen` field(s) are reassigned only after the read succeeds.
 
-`prune_audit_logs` clears `_seen_sets_initialized` to `False` as the first step of the call (before any disk mutation), and sets it back to `True` only after the atomic reassignment block. If any sub-step raises, the in-memory sets retain whatever values they held — but because the flag is now `False`, the next `append_*_once` triggers `_ensure_seen_sets_loaded()`, which reads disk as the source of truth and rebuilds. **This invalidate-before-disk-mutation discipline is load-bearing for re-runnable pruning:** without it, a partial cross-file prune on an already-initialized journal would leave the in-memory sets out of sync with disk, causing later appends to silently skip records that no longer exist on disk.
+**Two per-file flags govern the lifecycle.** `_audit_seen_initialized` tracks whether `_audit_seen` reflects `events.jsonl`; `_outcomes_seen_initialized` tracks whether `_dialogue_outcomes_seen` and `_delegation_outcomes_seen` reflect `outcomes.jsonl`. The two flags are flipped independently so audit and outcomes lifecycle events do not couple.
 
-`_ensure_seen_sets_loaded` is no-op when `_seen_sets_initialized` is `True`. If it raises mid-load, the flag stays `False` and the next `append_*_once` retries.
+`prune_audit_logs` clears **both** flags as the first step of the call (before any disk mutation), then restores each one immediately after its file's atomic seen-set reassignment. If the audit pass succeeds but the outcomes pass raises, `_audit_seen_initialized` is `True` (audit committed) while `_outcomes_seen_initialized` remains `False` (cleared at entry, unrestored). The next `append_dialogue_audit_event_once` is served from the freshly-committed in-memory audit seen-set with no disk read; the next outcomes append triggers `_ensure_outcomes_seen_loaded()` and reloads from the untouched `outcomes.jsonl`. **This invalidate-before-disk-mutation discipline is load-bearing for re-runnable pruning:** without per-file flag invalidation, a partial cross-file prune on an already-initialized journal would leave one file's in-memory set out of sync with disk, causing later appends to silently skip records that no longer exist on disk.
 
-### 5.7 `_ensure_seen_sets_loaded` semantics
+`_ensure_audit_seen_loaded()` is a no-op when `_audit_seen_initialized` is `True`. If it raises mid-load, that flag stays `False` and the next audit append retries.
+
+`_ensure_outcomes_seen_loaded()` is a no-op when `_outcomes_seen_initialized` is `True`. If it raises mid-load, that flag stays `False` and the next outcomes append (dialogue or delegation) retries. Because both outcomes seen-sets share a source file, a single read pass populates both — no double-read in steady state.
+
+### 5.7 Per-file seen-set load semantics
+
+Two private methods, one per source file. Each is independently triggered by the relevant `append_*_once` site and independently flag-gated. **Audit appends do not depend on `outcomes.jsonl` readability, and vice versa.**
 
 ```python
-def _ensure_seen_sets_loaded(self) -> None:
-    if self._seen_sets_initialized:
+def _ensure_audit_seen_loaded(self) -> None:
+    if self._audit_seen_initialized:
         return
 
     new_audit_seen: set[_AuditDedupKey] = set()
-    new_dialogue_outcomes_seen: set[_DialogueOutcomeDedupKey] = set()
-    new_delegation_outcomes_seen: set[_DelegationOutcomeDedupKey] = set()
 
-    # If either population raises, exception propagates and the seen-set
-    # state stays as it was. append_*_once will then surface the IO error
-    # rather than silently appending a possibly-duplicate record.
+    # If population raises, the exception propagates and _audit_seen stays
+    # as it was. append_dialogue_audit_event_once will surface the IO error
+    # rather than silently appending a possibly-duplicate record. Outcomes
+    # appends remain unaffected — they consult their own flag and file.
     self._populate_seen_from_file(
         self._audit_path,
         lambda r: _populate_from_audit_record(r, new_audit_seen),
     )
+
+    self._audit_seen = new_audit_seen
+    self._audit_seen_initialized = True
+
+
+def _ensure_outcomes_seen_loaded(self) -> None:
+    if self._outcomes_seen_initialized:
+        return
+
+    new_dialogue_outcomes_seen: set[_DialogueOutcomeDedupKey] = set()
+    new_delegation_outcomes_seen: set[_DelegationOutcomeDedupKey] = set()
+
+    # Single read pass over outcomes.jsonl populates BOTH outcomes seen-sets
+    # (dialogue and delegation) via _populate_from_outcome_record's dispatch
+    # on outcome_type. No double-read; the two sets are reassigned together
+    # under the single _outcomes_seen_initialized flag.
     self._populate_seen_from_file(
         self._outcomes_path,
         lambda r: _populate_from_outcome_record(
@@ -431,27 +474,50 @@ def _ensure_seen_sets_loaded(self) -> None:
         ),
     )
 
-    self._audit_seen = new_audit_seen
     self._dialogue_outcomes_seen = new_dialogue_outcomes_seen
     self._delegation_outcomes_seen = new_delegation_outcomes_seen
-    self._seen_sets_initialized = True
+    self._outcomes_seen_initialized = True
 ```
 
-`_populate_seen_from_file` tolerates malformed lines exactly as the legacy `_jsonl_contains` did: blank lines, `json.JSONDecodeError`, and non-dict records are skipped. A corrupt historical line never disables future writes.
+`_populate_seen_from_file` tolerates malformed lines exactly as the legacy `_jsonl_contains` did: blank lines, `json.JSONDecodeError`, and non-dict records are skipped. A corrupt historical line never disables future writes. **Invalid UTF-8 is *not* tolerated** — it raises `UnicodeDecodeError` from the file's `open(encoding="utf-8")` read (§5.2). That exception propagates and is caught at the bootstrap call site for `prune_audit_logs`. For the read-only `_ensure_*_seen_loaded` paths, it would propagate through `append_*_once` to the caller — but in practice, an invalid UTF-8 file is a corruption signal that surfaces at startup prune and warns there before any append-once site is reached.
 
 ### 5.8 Append-once update-after-success invariant
 
+Each `append_*_once` method triggers only its own source file's seen-set load.
+
 ```python
 def append_dialogue_audit_event_once(self, event: AuditEvent) -> None:
-    self._ensure_seen_sets_loaded()
+    self._ensure_audit_seen_loaded()   # only events.jsonl is read
     key: _AuditDedupKey = (event.action, event.collaboration_id, event.turn_id)
     if key in self._audit_seen:
         return
     self.append_audit_event(event)   # may raise — do NOT add key on failure
     self._audit_seen.add(key)
+
+
+def append_dialogue_outcome_once(self, record: OutcomeRecord) -> None:
+    self._ensure_outcomes_seen_loaded()   # only outcomes.jsonl is read
+    key: _DialogueOutcomeDedupKey = (
+        record.outcome_type, record.collaboration_id, record.turn_id,
+    )
+    if key in self._dialogue_outcomes_seen:
+        return
+    self.append_outcome(record)
+    self._dialogue_outcomes_seen.add(key)
+
+
+def append_delegation_outcome_once(self, record: DelegationOutcomeRecord) -> None:
+    self._ensure_outcomes_seen_loaded()   # only outcomes.jsonl is read
+    key: _DelegationOutcomeDedupKey = (record.outcome_type, record.job_id)
+    if key in self._delegation_outcomes_seen:
+        return
+    self.append_delegation_outcome(record)
+    self._delegation_outcomes_seen.add(key)
 ```
 
-The seen-set is mutated only after the underlying append IO returns successfully. If `append_audit_event` raises, the key remains absent from the set; a later retry can still write the record. Same shape for `append_dialogue_outcome_once` and `append_delegation_outcome_once`.
+The seen-set is mutated only after the underlying append IO returns successfully. If `append_audit_event` / `append_outcome` / `append_delegation_outcome` raises, the key remains absent from the set; a later retry can still write the record.
+
+**Cross-file failure isolation:** an unreadable `outcomes.jsonl` blocks `append_dialogue_outcome_once` and `append_delegation_outcome_once` (both call `_ensure_outcomes_seen_loaded()`), but `append_dialogue_audit_event_once` succeeds — it only depends on `events.jsonl` being readable. The symmetric isolation holds for an unreadable `events.jsonl`. This matches the API surface: audit and outcomes are independent retention domains.
 
 ### 5.9 Dedup-key semantic note
 
@@ -475,16 +541,18 @@ def main() -> None:
 
     try:
         summary = journal.prune_audit_logs()
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         logger.warning(
             "audit prune failed; continuing without startup retention cleanup",
             exc_info=True,
         )
     else:
-        logger.info(
+        summary_msg = (
             "audit prune complete: audit_retained=%d audit_dropped=%d "
             "audit_retained_malformed=%d outcomes_retained=%d "
-            "outcomes_dropped=%d outcomes_retained_malformed=%d",
+            "outcomes_dropped=%d outcomes_retained_malformed=%d"
+        )
+        summary_args = (
             summary.audit_retained,
             summary.audit_dropped,
             summary.audit_retained_malformed,
@@ -492,13 +560,22 @@ def main() -> None:
             summary.outcomes_dropped,
             summary.outcomes_retained_malformed,
         )
+        if (
+            summary.audit_retained_malformed > 0
+            or summary.outcomes_retained_malformed > 0
+        ):
+            # TTL-exempt malformed records exist on disk. Escalate so the
+            # signal is visible via logging.lastResort before F18 lands.
+            logger.warning(summary_msg, *summary_args)
+        else:
+            logger.info(summary_msg, *summary_args)
 
     # ... rest of bootstrap (ControlPlane, registries, McpServer) unchanged ...
 ```
 
-No concrete `now` argument is passed — production consumes `journal._clock()` via `_now()`. The catch is narrowed to `OSError`; parse-side or implementation-bug exceptions are not swallowed and would surface as bootstrap failures.
+No concrete `now` argument is passed — production consumes `journal._clock()` via `_now()`. The catch is narrowed to **`OSError` and `UnicodeDecodeError`** — both represent IO-level or byte-level corruption that should not block plugin startup. `json.JSONDecodeError` is *not* in this catch list because malformed-JSON records are line-local retained data (§5.3 retain-on-uncertainty), never raised out of the prune pass. Programming errors (`ValueError` from naive clocks, `AttributeError`, etc.) are not caught and surface as bootstrap failures.
 
-Without `logging.basicConfig` (which F18 will provide), Python's logging defaults dispatch `logger.warning(...)` through `logging.lastResort` to stderr — so the prune-failure signal is observable to whatever process sees the MCP server's stderr (typically Claude Code), even before F18. `logger.info(...)` is below the lastResort threshold and is discarded; operator visibility into the success-summary `info` call requires F18 or `caplog`. Both calls are testable via `caplog` or a monkeypatched logger.
+Without `logging.basicConfig` (which F18 will provide), Python's logging defaults dispatch `logger.warning(...)` through `logging.lastResort` to stderr — so the prune-failure signal **and** the malformed-retained-nonzero signal are both observable to whatever process sees the MCP server's stderr (typically Claude Code), even before F18. `logger.info(...)` is below the lastResort threshold and is discarded by default; operator visibility into the *routine* success-summary `info` call requires F18 or `caplog`. All paths are testable via `caplog` or a monkeypatched logger.
 
 ### 6.2 Factory-deferred reality
 
@@ -508,12 +585,12 @@ Without `logging.basicConfig` (which F18 will provide), Python's logging default
 
 `prune_audit_logs()` is safe to call multiple times. Each invocation:
 - Recomputes `cutoff` from the current `_now()` (or explicit `now=`).
-- Clears `_seen_sets_initialized = False` before any disk mutation (invalidate-before-disk-mutation discipline — see §5.6).
-- Rebuilds local seen-sets from scratch.
-- Reassigns in-memory seen-sets and sets `_seen_sets_initialized = True` only after both file passes complete without raising.
-- Rewrites each file atomically per file (§5.5). A failed later-file prune can leave an earlier-file already rewritten, putting the canonical files in a mixed-prune state (§2 Contract — per-file, not pair-wise). Append correctness across that state is preserved because the cleared flag forces the next `append_*_once` to reload from disk.
+- Clears **both** `_audit_seen_initialized = False` and `_outcomes_seen_initialized = False` before any disk mutation (per-file invalidate-before-disk-mutation discipline — see §5.6).
+- Rebuilds the per-file seen-sets from scratch in two passes (one per file).
+- Restores each per-file flag to `True` **independently**, immediately after its file's seen-set is atomically reassigned. The audit flag is restored after the audit pass; the outcomes flag is restored after the outcomes pass.
+- Rewrites each file atomically per file (§5.5). A failed later-file prune can leave an earlier-file already rewritten, putting the canonical files in a mixed-prune state (§2 Contract — per-file, not pair-wise). Append correctness across that state is preserved because each file's flag is restored only on that file's success: the next `append_*_once` for the failed-file domain reloads from disk via its own `_ensure_*_seen_loaded()`, while the succeeded-file domain serves appends from in-memory state.
 
-A second prune after time has advanced correctly evicts newly-expired keys.
+A second prune after time has advanced correctly evicts newly-expired keys from both files independently.
 
 ### 6.4 Test fixture pattern
 
@@ -522,7 +599,7 @@ A second prune after time has advanced correctly evicts newly-expired keys.
 | Default dedup behavior, no time-sensitivity | `OperationJournal(plugin_data_path=tmp_path)` |
 | Pruning correctness with fake clock | `OperationJournal(plugin_data_path=tmp_path, clock=lambda: aware_datetime)` |
 | Explicit cutoff override | Pass `now=aware_datetime` to `prune_audit_logs()` |
-| Direct-construction dedup safety | Construct without calling prune; first `append_*_once` exercises `_ensure_seen_sets_loaded` |
+| Direct-construction dedup safety | Construct without calling prune; first `append_*_once` exercises `_ensure_audit_seen_loaded` or `_ensure_outcomes_seen_loaded` (per source file) |
 
 A small fixture helper keeps tests tight:
 
@@ -553,6 +630,16 @@ Update the "Retention" row of the Audit Log column to read:
 
 The "Write discipline" row is unchanged ("Best-effort append").
 
+### 7.1a Add §Operational Outcomes subsection after §Why Two Logs
+
+Insert a new subsection so `analytics/outcomes.jsonl` has an architecture-level mention in the owner spec (currently it appears only as a retention bullet, hidden under "Audit Log"). The "Two-Log Architecture" title remains — outcomes is a *sibling* of the Audit Log in retention behavior, not a third equally-distinct log.
+
+> ### Operational Outcomes
+>
+> A third file, `${CLAUDE_PLUGIN_DATA}/analytics/outcomes.jsonl`, holds delegation and dialogue terminal outcome records (`OutcomeRecord` and `DelegationOutcomeRecord`). It shares the Audit Log's retention class — best-effort append, 30-day TTL, startup-pruned, single-writer ownership — but uses a different record format (typed terminal outcomes rather than per-event audit entries) and a different consumer (retrospective diagnostics rather than incident reconstruction).
+>
+> **Outcomes are operational diagnostics with a 30-day operational horizon, not long-term analytics history.** A future feature that consumes outcomes for long-term analytics must introduce a separate retention class before shipping.
+
 ### 7.2 §Audit Log → Retention subsection
 
 Replace the existing three bullets with:
@@ -561,7 +648,7 @@ Replace the existing three bullets with:
 >
 > - **Default TTL:** 30 days from event timestamp.
 > - **Storage:** `${CLAUDE_PLUGIN_DATA}/audit/events.jsonl` (audit events) and `${CLAUDE_PLUGIN_DATA}/analytics/outcomes.jsonl` (dialogue and delegation outcomes).
-> - **Cleanup:** Pruned at plugin startup. Pruning is a pure filter — retained records are written back as their original raw lines, never re-serialized.
+> - **Cleanup:** Pruned at plugin startup. Pruning is a pure filter — retained record bytes are preserved (with a single `\n` appended to the final retained line if absent, to keep the file JSONL-append-safe). Records are never re-serialized through `json.dumps`.
 > - **Timestamp parsing:** Pruning compares timezone-aware ISO 8601 timestamps. Records with missing, non-string, unparseable, or timezone-naive `timestamp` fields are retained (retain-on-uncertainty: ambiguous records are never silently erased). These malformed-timestamp records are **TTL-exempt by design** — the 30-day TTL applies only to records with parseable, timezone-aware timestamps; sufficiently corrupt records can survive past the 30-day window indefinitely.
 > - **Per-file atomicity:** Pruning is atomic per file (`events.jsonl` and `outcomes.jsonl` are independent retention surfaces), not pair-wise. A failure of one file's prune after the other has already been rewritten leaves a mixed-prune state; the next startup re-runs both files.
 > - **Ownership model:** Exactly one MCP process owns a given `${CLAUDE_PLUGIN_DATA}` directory at a time. Concurrent prune from two processes against the same data directory is undefined and unsupported (matches the existing operation-journal ownership model).
@@ -586,7 +673,7 @@ Operation Journal, Stale Advisory Context Marker, Crash Recovery Paths, Pending 
 
 ## 8. Testing Strategy
 
-All tests in `tests/test_journal.py`.
+All journal-internal tests in `tests/test_journal.py`. **Bootstrap-integration tests (§8.9) live in `tests/test_bootstrap.py`** and use that module's established importlib-based loader pattern for `scripts/codex_runtime_bootstrap.py`.
 
 ### 8.1 Pruning correctness — happy path
 - `test_prune_audit_logs_drops_records_older_than_ttl`
@@ -598,12 +685,14 @@ All tests in `tests/test_journal.py`.
 
 ### 8.2 Retain-on-uncertainty (parametrized)
 - `test_prune_audit_logs_retains_record_with_malformed_timestamp` — parametrized over (missing field, non-string, unparseable ISO, timezone-naive)
-- `test_prune_audit_logs_retains_malformed_json_line` — invalid JSON; raw line preserved byte-for-byte
+- `test_prune_audit_logs_retains_malformed_json_line` — invalid JSON; raw line preserved (record bytes unchanged; final-newline normalization only applied to the file's last line if it lacked one — see §8.3).
 - `test_prune_audit_logs_retains_non_dict_record` — array or scalar JSON line
 - `test_prune_audit_logs_drops_blank_lines`
+- `test_prune_audit_logs_aborts_on_invalid_utf8` — pre-populate `events.jsonl` with an invalid UTF-8 byte sequence (e.g., `b"\x80abc\n"`); call `prune_audit_logs()`; assert it raises `UnicodeDecodeError`; assert the file on disk is unchanged (pre-replace failure path). Pins F5 (round-4): byte-level corruption is fatal-to-pass, not retained-on-uncertainty. Mirror test for `outcomes.jsonl`.
 
 ### 8.3 Raw-line retention invariant
-- `test_prune_audit_logs_preserves_byte_for_byte_for_retained_records` — write a record with unsorted keys / extra whitespace; after prune, retained line is byte-identical to input.
+- `test_prune_audit_logs_preserves_record_bytes_for_retained_records` — write a record with unsorted keys / extra whitespace; after prune, retained record bytes are identical to input (`json.dumps` is not invoked on retained records).
+- `test_prune_audit_logs_appends_trailing_newline_to_missing_eof_newline` — write a file whose final retained record lacks a trailing newline; assert the rewritten file ends with `\n` so the next `append_*` call produces a valid JSONL record boundary. Pins F2 (round-4): the contract is "record bytes preserved + final-newline normalization for append safety," not strict byte-for-byte.
 
 ### 8.4 Atomic replacement
 - `test_prune_audit_logs_preserves_original_on_pre_replace_failure` — patch `os.fsync` (or the temp-file open) to raise; assert original file unchanged.
@@ -617,12 +706,18 @@ All tests in `tests/test_journal.py`.
 
 ### 8.6 Re-runnable prune (atomic rebuild)
 - `test_prune_audit_logs_evicts_newly_expired_keys_on_second_run` — record A at T0 retained; advance clock past TTL; prune again; A is dropped AND removed from `_audit_seen`.
-- `test_prune_audit_logs_invalidates_seen_set_flag_on_partial_failure` — initialize seen-sets via a successful first prune; patch outcomes pass to raise OSError mid-pass; second prune raises but `_seen_sets_initialized` becomes False; next `append_*_once` triggers reload via `_ensure_seen_sets_loaded()` and dedup reflects post-events-pruned disk state. Pins F1 (new-review): without the flag-clear-at-entry, stale in-memory keys would silently skip valid appends.
+- `test_prune_audit_logs_restores_per_file_flag_after_each_pass` — successful prune. After audit pass completes, assert `_audit_seen_initialized == True`; after outcomes pass completes, assert `_outcomes_seen_initialized == True`. Pins per-file lifecycle: each flag is restored independently, not as a final batch.
+- `test_prune_audit_logs_partial_failure_keeps_outcomes_flag_cleared` — initialize seen-sets via a successful first prune (both flags True); patch outcomes pass to raise `OSError` mid-pass on the second run. Assert: second prune raises; `_audit_seen_initialized == True` (audit pass committed); `_outcomes_seen_initialized == False` (never restored). Next `append_dialogue_audit_event_once` consults in-memory state directly (no disk read needed). Next `append_dialogue_outcome_once` triggers `_ensure_outcomes_seen_loaded()` and reloads from disk. Pins F1 (round-4 PA): per-file flag invalidation enables partial-failure isolation between domains.
+- `test_unreadable_outcomes_does_not_block_audit_append_once` — patch `_outcomes_path.open` to raise `OSError` on read; call `append_dialogue_audit_event_once` (which only triggers `_ensure_audit_seen_loaded()`); assert the audit append succeeds. Then call `append_dialogue_outcome_once` and assert it raises `OSError` (since outcomes file is unreadable). Pins F1 (round-4): cross-file failure isolation at the append-once boundary.
 
 ### 8.7 Dedup-set construction
-- `test_append_dialogue_audit_event_once_loads_seen_set_on_first_call` (no prune)
-- `test_ensure_seen_sets_loaded_tolerates_corrupt_jsonl_line` — corrupt line in source file does not block population.
-- `test_ensure_seen_sets_loaded_does_not_mark_initialized_on_failure` — patch population to raise; assert `_seen_sets_initialized` remains `False` and second call retries.
+- `test_append_dialogue_audit_event_once_loads_audit_seen_on_first_call` (no prune) — only `events.jsonl` is read; `_outcomes_seen_initialized` remains `False`.
+- `test_append_dialogue_outcome_once_loads_outcomes_seen_on_first_call` (no prune) — only `outcomes.jsonl` is read; `_audit_seen_initialized` remains `False`.
+- `test_outcomes_seen_loaded_populates_both_dialogue_and_delegation_sets` — single read of `outcomes.jsonl` populates both `_dialogue_outcomes_seen` and `_delegation_outcomes_seen` in one pass; pins the shared-read invariant.
+- `test_ensure_audit_seen_loaded_tolerates_corrupt_jsonl_line` — corrupt line in `events.jsonl` does not block population.
+- `test_ensure_outcomes_seen_loaded_tolerates_corrupt_jsonl_line` — same for `outcomes.jsonl`.
+- `test_ensure_audit_seen_loaded_does_not_mark_initialized_on_failure` — patch population to raise; assert `_audit_seen_initialized` remains `False` and second call retries; `_outcomes_seen_initialized` is unaffected.
+- `test_ensure_outcomes_seen_loaded_does_not_mark_initialized_on_failure` — same for outcomes flag; `_audit_seen_initialized` unaffected.
 
 ### 8.8 Dedup-set update invariant
 - `test_append_dialogue_audit_event_once_skips_when_key_in_seen_set`
@@ -630,8 +725,15 @@ All tests in `tests/test_journal.py`.
 - Mirror tests for `append_dialogue_outcome_once` and `append_delegation_outcome_once`.
 
 ### 8.9 Bootstrap integration
-- `test_bootstrap_logs_prune_summary_when_prune_succeeds` — patch `McpServer.run` to no-op; patch `default_plugin_data_path` to `tmp_path`; capture log via `caplog`; assert `logger.info` with summary fields fired.
+
+**Location: `tests/test_bootstrap.py`** (not `test_journal.py`). Use that module's existing importlib-based loader pattern for `scripts/codex_runtime_bootstrap.py`.
+
+- `test_bootstrap_logs_info_summary_when_prune_succeeds_with_zero_malformed` — patch `McpServer.run` to no-op; patch `default_plugin_data_path` to `tmp_path`; populate journal with well-formed records only; capture log via `caplog`; assert `logger.info` (level `INFO`) with summary fields fired.
+- `test_bootstrap_warns_summary_when_prune_succeeds_with_nonzero_audit_malformed` — same setup but with one malformed-timestamp record in `events.jsonl`; assert summary fires at level `WARNING`, not `INFO`. Pins F3 (round-4): default-visible operator signal for the silent-accumulation case.
+- `test_bootstrap_warns_summary_when_prune_succeeds_with_nonzero_outcomes_malformed` — mirror for `outcomes.jsonl`.
 - `test_bootstrap_warns_when_prune_raises_oserror` — patch `OperationJournal.prune_audit_logs` to raise `OSError`; assert `logger.warning` fired and bootstrap continues to `server.run()` (which is itself patched).
+- `test_bootstrap_warns_when_prune_raises_unicode_decode_error` — patch `OperationJournal.prune_audit_logs` to raise `UnicodeDecodeError`; assert `logger.warning` fired and bootstrap continues. Pins F5 (round-4): the catch list includes `UnicodeDecodeError`, not just `OSError`.
+- `test_bootstrap_does_not_swallow_value_error` — patch `OperationJournal.prune_audit_logs` to raise `ValueError`; assert bootstrap re-raises (programming errors are not caught). Pins the precise catch list `(OSError, UnicodeDecodeError)`.
 
 ### 8.10 Legacy test migration
 - `rg "_jsonl_contains" tests/` to inventory.
@@ -643,10 +745,11 @@ All tests in `tests/test_journal.py`.
 Before claiming complete:
 
 ```bash
-uv run pytest tests/test_journal.py -v     # new + existing journal tests pass
-uv run pytest -q                            # full suite passes
-uv run ruff check .                         # no lint regressions across server/ scripts/ tests/
-rg "_jsonl_contains" server/ scripts/       # zero hits in production code
+uv run pytest tests/test_journal.py tests/test_bootstrap.py -v  # new + existing tests pass
+uv run pytest -q                                                # full suite passes
+uv run ruff check .                                             # no lint regressions across server/ scripts/ tests/
+rg "_jsonl_contains" server/ scripts/                           # zero hits in production code
+rg "_seen_sets_initialized" server/ scripts/                    # zero hits — the unified flag was split into per-file flags
 ```
 
 Per the verification-before-completion discipline, the implementation plan must include this block as its final step and report the actual output before any "done" claim.
