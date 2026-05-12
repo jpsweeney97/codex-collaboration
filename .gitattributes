@@ -1,0 +1,8 @@
+# Migrated diagnostic packets under `docs/diagnostics/` are byte-identical
+# copies of monorepo source. Trailing whitespace inside their fenced
+# ```diff blocks is intentional — those spaces are unified-diff
+# context-line markers for blank lines in the captured source diffs
+# (removing them would corrupt the captured diff). See the §Diagnostics
+# subsection of `docs/migration/monorepo-extraction-manifest.md` for
+# the migration policy and the active-classification rationale.
+docs/diagnostics/*.md  whitespace=-blank-at-eol

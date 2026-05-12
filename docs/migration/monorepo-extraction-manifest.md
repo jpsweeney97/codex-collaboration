@@ -126,6 +126,8 @@ A file is **active** if it governs current behavior, current status, current unr
 
 **Reclassification note:** Commit `701952b8` initially placed these 10 files in the `left-historical` bucket (per the "diagnostics" entry in its commit-message snapshot-true list). Adversarial review of the cleanup branch surfaced that they are actively cited by the current rebaseline architecture note, Task 0 of the rebaseline implementation plan, the envelope-overclaim-fix plan, 2 active tickets, the drift assessment, the drift-recovery decision record, and several closed tickets — meeting the active-classification criterion in the [Classification Vocabulary](#classification-vocabulary) section. Reclassified from `left-historical` to `migrated-active`; moved from monorepo to this repo in monorepo commit `25a5afaf` (chore branch follow-up to `701952b8`).
 
+**Byte-faithful migration note:** The 10 files were `cp -p`'d from the monorepo source; their per-file SHA-256 hashes match monorepo state at `dd112da6` / `701952b8` exactly. One consequence is that trailing whitespace inside the fenced ` ```diff ` blocks of `2026-04-28-delegate-execution-diagnostic.md` (lines 694, 717, 718 — unified-diff context-line markers for blank lines in the captured Python source diff) is preserved as-is, which would otherwise be flagged by `git diff --check`. The repo-root `.gitattributes` exempts `docs/diagnostics/*.md` from the `blank-at-eol` check (`whitespace=-blank-at-eol`). If a future edit modifies these files, audit the diff to ensure the embedded diff content isn't accidentally corrupted by an editor's "trim trailing whitespace" convenience setting.
+
 #### Tickets
 
 | Old path | New path | Rationale |
