@@ -3692,18 +3692,25 @@ def test_recover_startup_leaves_unresolved_when_rollback_fails(
     )
 
 
-def test_recover_startup_suspends_rollback_when_user_edits_present(
+def test_recover_startup_suspends_rollback_when_user_edits_tracked_file(
     tmp_path: Path,
 ) -> None:
-    """Recovery must not silently discard user edits outside the reviewed set.
+    """Recovery must not silently discard user edits to TRACKED files.
 
-    Scenario: a delegation applied changes to README.md, then the plugin
-    crashed between the dispatched journal write and the completed write.
-    Between crash and recovery, the user manually edited NOTES.md (a file
-    Codex never touched). On restart, recover_startup encounters the
-    dispatched entry; the legacy code path would call `git checkout -- .`
-    and discard the user's NOTES.md edit. The fix suspends the rollback
-    and leaves the job at `rollback_needed` for manual resolution.
+    This is the actual data-loss scenario: `git checkout -- .` reverts
+    working-tree modifications on tracked files. An untracked file would
+    be left alone by checkout, so it does not prove the bug.
+
+    Scenario: a delegation applied changes to README.md. Before the
+    plugin crashed, the user had also committed an unrelated SUPPORT.md
+    file. Between crash and recovery, the user edited SUPPORT.md
+    manually. The legacy code path would call `git checkout -- .` and
+    revert SUPPORT.md to its committed state. The fix detects the
+    unexpected modification and suspends the rollback.
+
+    Per docs/specs/recovery-and-journal.md §Replay rules, the journal
+    must remain unresolved while the job sits at rollback_needed, so
+    the next startup re-enters recovery.
     """
     controller, job_store, journal, primary_repo, job_id, _artifact_hash, _cb = (
         _build_promote_scenario(tmp_path)
@@ -3739,6 +3746,21 @@ def test_recover_startup_suspends_rollback_when_user_edits_present(
         session_id=session_id,
     )
 
+    # User had separately committed an unrelated tracked file.
+    tracked_path = primary_repo / "SUPPORT.md"
+    original_content = "# Support docs\n"
+    tracked_path.write_text(original_content, encoding="utf-8")
+    subprocess.run(
+        ["git", "-C", str(primary_repo), "add", "SUPPORT.md"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(primary_repo), "commit", "-m", "add support docs"],
+        check=True,
+        capture_output=True,
+    )
+
     persisted = job_store.get(job_id)
     assert persisted is not None
     diff_path = persisted.artifact_paths[0]
@@ -3748,11 +3770,10 @@ def test_recover_startup_suspends_rollback_when_user_edits_present(
         capture_output=True,
     )
 
-    # User manually edits a file that is NOT in reviewed_changed_files.
-    # The reviewed set only contains README.md (modified by the delegation).
-    user_edit_path = primary_repo / "NOTES.md"
-    user_edit_content = "# User notes written between crash and recovery\n"
-    user_edit_path.write_text(user_edit_content, encoding="utf-8")
+    # User modifies the tracked file in the working tree. `git checkout
+    # -- .` would revert this back to original_content.
+    user_content = "# Modified by user during crash window\n"
+    tracked_path.write_text(user_content, encoding="utf-8")
 
     controller.recover_startup()
 
@@ -3764,11 +3785,19 @@ def test_recover_startup_suspends_rollback_when_user_edits_present(
         "present outside the reviewed change set."
     )
 
-    # User's manual edit must be untouched.
-    assert user_edit_path.exists(), "User edit must not be deleted by recovery"
-    assert (
-        user_edit_path.read_text(encoding="utf-8") == user_edit_content
-    ), "User edit must not be overwritten by automatic rollback"
+    # The tracked-file edit must survive — this is the data-loss surface.
+    assert tracked_path.read_text(encoding="utf-8") == user_content, (
+        "Tracked-file edit must not be overwritten by automatic rollback"
+    )
+
+    # Journal must stay unresolved so the next startup re-enters recovery
+    # once the user has resolved their edits (per recovery-and-journal.md).
+    unresolved = journal.list_unresolved(session_id=session_id)
+    promotion_unresolved = [e for e in unresolved if e.operation == "promotion"]
+    assert len(promotion_unresolved) > 0, (
+        "Journal must remain unresolved while job is at rollback_needed "
+        "(spec: promotion:completed is reserved for terminal promotion states)"
+    )
 
 
 def test_bootstrap_factory_wires_promotion_callback(tmp_path: Path) -> None:

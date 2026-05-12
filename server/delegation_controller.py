@@ -3078,8 +3078,14 @@ class DelegationController:
                         # would silently discard any working-tree edits
                         # outside the reviewed change set; the user has no
                         # post-hoc signal that their work was lost. Detect
-                        # the case and leave the job at `rollback_needed`
-                        # for manual resolution instead.
+                        # the case, leave the job at `rollback_needed`, and
+                        # leave the journal entry unresolved — matches the
+                        # rollback-failure pattern in
+                        # docs/specs/recovery-and-journal.md §Replay rules,
+                        # which keeps `promotion:completed` reserved for
+                        # terminal promotion states (verified, rolled_back).
+                        # The next startup re-enters recovery; when the user
+                        # has resolved their edits, verification proceeds.
                         if self._workspace_has_unexpected_edits(
                             primary_repo_root,
                             reviewed_changed_files=reviewed_changed_files,
@@ -3095,8 +3101,7 @@ class DelegationController:
                                 entry.job_id,
                                 promotion_state="rollback_needed",
                             )
-                            # Fall through to advance journal to completed:
-                            # the recovery decision has been made.
+                            continue
                         else:
                             verified = self._verify_promotion(
                                 job=job,
