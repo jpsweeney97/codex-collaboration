@@ -4,6 +4,7 @@
 id: T-20260330-07
 date: 2026-03-30
 status: closed
+closed_date: 2026-04-22
 priority: medium
 tags: [codex-collaboration, analytics, review, cutover, supersession]
 blocked_by: [T-20260330-04, T-20260330-06]

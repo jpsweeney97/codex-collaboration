@@ -4,6 +4,7 @@
 id: T-20260330-01
 date: 2026-03-30
 status: closed
+closed_date: '2026-04-12'
 priority: medium
 tags: [codex-collaboration, hardening, context-assembly, redaction]
 blocked_by: []

@@ -4,6 +4,7 @@
 id: T-20260416-01
 date: 2026-04-16
 status: closed
+closed_date: 2026-04-30
 priority: medium
 tags: [codex-collaboration, dialogue, bug, post-benchmark, mcp-dispatch]
 blocked_by: []

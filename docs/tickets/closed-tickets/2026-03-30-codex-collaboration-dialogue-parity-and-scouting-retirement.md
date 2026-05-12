@@ -4,6 +4,7 @@
 id: T-20260330-04
 date: 2026-03-30
 status: closed
+closed_date: 2026-04-17
 priority: high
 tags: [codex-collaboration, dialogue, agents, benchmark, supersession]
 blocked_by: [T-20260330-03]

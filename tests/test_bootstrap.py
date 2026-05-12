@@ -17,6 +17,10 @@ _bootstrap_path = (
 _hook_path = (
     Path(__file__).resolve().parent.parent / "scripts" / "publish_session_id.py"
 )
+_hooks_config_path = Path(__file__).resolve().parent.parent / "hooks" / "hooks.json"
+_regenerate_schema_path = (
+    Path(__file__).resolve().parent.parent / "scripts" / "regenerate_schema.sh"
+)
 
 
 def _import_bootstrap():
@@ -178,6 +182,31 @@ class TestPublishSessionIdHook:
             timeout=5,
         )
         assert not (tmp_path / "session_id").exists()
+
+
+class TestHookCommandRuntime:
+    """Tests for hook command interpreter wiring."""
+
+    def test_python_hooks_use_project_uv_runtime(self) -> None:
+        config = json.loads(_hooks_config_path.read_text(encoding="utf-8"))
+        commands: list[str] = []
+        for event_entries in config["hooks"].values():
+            for entry in event_entries:
+                for hook in entry["hooks"]:
+                    command = hook.get("command", "")
+                    if "/scripts/" in command and command.endswith(".py\""):
+                        commands.append(command)
+
+        assert commands
+        for command in commands:
+            assert not command.startswith("python3 ")
+            assert command.startswith('uv run --directory "${CLAUDE_PLUGIN_ROOT}" python ')
+
+    def test_schema_regeneration_uses_project_uv_runtime(self) -> None:
+        script = _regenerate_schema_path.read_text(encoding="utf-8")
+
+        assert "PYTHON_CMD=(uv run --directory \"$PLUGIN_DIR\" python)" in script
+        assert "python3 -c" not in script
 
     def test_noop_on_invalid_json_input(self, tmp_path: Path) -> None:
         result = subprocess.run(

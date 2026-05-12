@@ -51,7 +51,7 @@ uv run pytest tests -q
 uv run ruff check .
 ```
 
-The pytest suite has 1099 tests and takes ~4 minutes. A standalone CI workflow runs the same set on every push.
+The pytest suite has 1101 tests and takes ~4-5 minutes. A standalone CI workflow runs the same set on every push.
 
 ### Filesystem Layout (for path-touching code)
 

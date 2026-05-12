@@ -253,7 +253,7 @@ The `| sort` step is critical: `find` traverses inodes in filesystem-defined ord
 | Tree | Files | SHA-256 (sorted-line aggregate) |
 |---|---|---|
 | `server/*.py` | 31 | `3e9c492ca8cd869805173cef7af6852f7b0fbe476c29f1975a6b5953b8a58309` |
-| `tests/**.py` (excluding `__pycache__`) | 67 | `4645b4fa52df1649828d4c596beb67b624a2e75fd21b323610b855dbdb1af332` |
+| `tests/**.py` (excluding `__pycache__`) | 67 | `68e35e0bfab2242c17265a6ef3ce54999b98dbdd4873bf8531175a698a173a3f` |
 | `tests/fixtures/**` | 197 | `fe80d8ae2aa3183adcaf1eacdbc3ecf254d2f0ca1f07f199c4fa92dfd6a56153` |
 | `skills/**` (excluding bytecode caches) | 9 (8 `SKILL.md` + 1 `codex-analytics/scripts/analytics.py`) | `0da785c2f52796e8cec27e0f80524881c2a210f5f1cdad6f3b0bf8a1a43440ab` |
 | `docs/specs/**` | 18 (12 top-level + 5 design-docs + 1 evidence JSON) | `035c777d5e4270585a61c55b6597dab506ec5e7b949ed8c235791c9e1d771b28` |
@@ -263,7 +263,7 @@ The `| sort` step is critical: `find` traverses inodes in filesystem-defined ord
 
 **Note on prior checksums (commit `e71db48`):** The initial manifest used `find ... -exec shasum +` without sorting, which made the aggregate non-deterministic. Three of the five prior checksums (`tests/fixtures`, `skills`, `docs/specs`) did not reproduce when independently recomputed. The hashes above are recomputed with the deterministic method and after the post-initial-commit cleanup (commits `cfcb642`, `e71db48`, and the DoD-followup commit landing this manifest revision).
 
-**Note on `tests/**.py` checksum correction (post-cleanup-branch review):** The `tests/**.py` row previously recorded `abd15ddb9f440678fdffcd432c93ae14bd246a935847492eb79d7b11536fecc3`. Adversarial review of the cleanup branch re-ran the documented method against `HEAD = 7194ffe` (67 files, command: `find tests -type f -name '*.py' -exec shasum -a 256 {} + | sort | shasum -a 256`) and obtained `4645b4fa52df1649828d4c596beb67b624a2e75fd21b323610b855dbdb1af332`. The earlier value did not reproduce under any tested interpretation of "tests/**.py" (with or without the `-name '*.py'` filter, with or without `__pycache__` exclusion). Root cause undetermined — most likely state-divergence at the time of the original computation. The table above shows the recomputed-and-verified value.
+**Note on `tests/**.py` checksum correction (post-cleanup-branch review):** The `tests/**.py` row previously recorded `abd15ddb9f440678fdffcd432c93ae14bd246a935847492eb79d7b11536fecc3`. Adversarial review of the cleanup branch re-ran the documented method against `HEAD = 7194ffe` (67 files, command: `find tests -type f -name '*.py' -exec shasum -a 256 {} + | sort | shasum -a 256`) and obtained `4645b4fa52df1649828d4c596beb67b624a2e75fd21b323610b855dbdb1af332`. The earlier value did not reproduce under any tested interpretation of "tests/**.py" (with or without the `-name '*.py'` filter, with or without `__pycache__` exclusion). Root cause undetermined — most likely state-divergence at the time of the original computation. The table above shows the current recomputed-and-verified value, refreshed on 2026-05-12 after adding hook-runtime regression coverage.
 
 **Note on handoff count (post-`3563bb3`, post-active-untrack in commit `c0d237c`):** The `docs/handoffs/**.md` row reports the **tracked sealed corpus** of 142 archived handoffs as enumerated by `git ls-files docs/handoffs/`. Three temporal frames apply:
 
@@ -492,10 +492,10 @@ All gates run from `/Users/jp/Projects/active/codex-collaboration/` with `PYTHON
 |---|---|---|
 | Dependency resolution | `uv sync` | OK — 7 packages installed (`iniconfig`, `packaging`, `pluggy`, `pygments`, `pytest 9.0.3`, `pyyaml 6.0.3`, `ruff 0.15.12`) |
 | Lint | `uv run ruff check .` | `All checks passed!` |
-| Full test suite | `uv run pytest tests -q` | `1099 passed in 254.07s` |
-| MCP config | `python -m json.tool .mcp.json` | OK |
-| Plugin manifest | `python -m json.tool .claude-plugin/plugin.json` | OK |
-| Hooks config | `python -m json.tool hooks/hooks.json` | OK |
+| Full test suite | `uv run pytest tests -q` | `1101 passed in 253.96s` |
+| MCP config | `uv run python -m json.tool .mcp.json` | OK |
+| Plugin manifest | `uv run python -m json.tool .claude-plugin/plugin.json` | OK |
+| Hooks config | `uv run python -m json.tool hooks/hooks.json` | OK |
 | Import smoke | `import server.mcp_server` etc. | All modules resolve from `/Users/jp/Projects/active/codex-collaboration` |
 | Convenience runner | `./scripts/check` | All checks passed |
 

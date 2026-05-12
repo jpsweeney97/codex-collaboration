@@ -39,12 +39,14 @@ The implementation rebaseline should therefore proceed in two tracks:
 
 ## Evidence Frame
 
-This note is based on untracked worktree artifacts in:
+This note was originally based on untracked worktree artifacts in:
 
 `/Users/jp/Projects/active/claude-code-tool-dev/.worktrees/feature/codex-app-server-client-platform-exploration`
 
-Do not describe this evidence as committed `HEAD` truth until the branch stages
-and commits the diagnostic and architecture artifacts.
+After the 2026-05-11 source-authority migration, the cited diagnostics are
+migrated-active evidence in this repository under `docs/diagnostics/`. Treat the
+monorepo worktree path above as provenance for where the evidence was captured,
+not as the current source location.
 
 The evidence ladder is:
 

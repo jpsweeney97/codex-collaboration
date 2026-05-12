@@ -46,7 +46,11 @@ Use these terms consistently in code comments, diagnostics, tickets, and commit 
 
 ## Current Evidence Frame
 
-All inputs in this worktree are untracked until staged and committed. Do not describe them as committed `HEAD` truth.
+This plan was originally written against untracked evidence in the monorepo
+worktree below. After the 2026-05-11 source-authority migration, the copied
+diagnostics and architecture notes named here are migrated-active artifacts in
+this repository. Treat the monorepo worktree path as evidence-capture
+provenance, not as the current source location.
 
 Active worktree:
 

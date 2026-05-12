@@ -4,7 +4,7 @@
 id: T-20260423-01
 date: 2026-04-23
 status: closed
-closed_at: 2026-04-29
+closed_date: 2026-04-29
 closed_via: a7a4e9c9
 priority: high
 tags: [codex-collaboration, delegation, sandbox, approval, execution]

@@ -3,7 +3,8 @@
 ```yaml
 id: T-20260403-01
 date: 2026-04-03
-status: wontfix
+status: closed
+resolution: wontfix
 priority: high
 tags: [codex-collaboration, benchmark, t7, scope, corpus-design]
 blocked_by: []

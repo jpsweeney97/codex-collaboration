@@ -13,12 +13,13 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PLUGIN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+PYTHON_CMD=(uv run --directory "$PLUGIN_DIR" python)
 
 # Get version from argument or from code constant
 if [[ $# -ge 1 ]]; then
     VERSION="$1"
 else
-    VERSION=$(python3 -c "
+    VERSION=$("${PYTHON_CMD[@]}" -c "
 import re, sys
 with open('${PLUGIN_DIR}/server/codex_compat.py') as f:
     for line in f:
@@ -67,7 +68,7 @@ codex app-server generate-json-schema --out "$TEMP_DIR"
 # Canonicalize JSON key order for reproducible output.
 # The Codex CLI emits definition keys in non-deterministic order across runs.
 echo "Canonicalizing JSON key order ..."
-python3 -c "
+"${PYTHON_CMD[@]}" -c "
 import json, pathlib
 temp = pathlib.Path('${TEMP_DIR}')
 for f in sorted(temp.rglob('*.json')):
@@ -94,7 +95,7 @@ trap - EXIT
 # Generate derived required-methods.json
 echo ""
 echo "Generating required-methods.json ..."
-python3 -c "
+"${PYTHON_CMD[@]}" -c "
 import json, sys
 sys.path.insert(0, '${PLUGIN_DIR}')
 from server.codex_compat import REQUIRED_METHODS, OPTIONAL_METHODS, TESTED_CODEX_VERSION, extract_client_methods

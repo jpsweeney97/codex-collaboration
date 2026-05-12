@@ -3,13 +3,15 @@
 ```yaml
 id: T-20260410-03
 date: '2026-04-10'
-status: done
+status: closed
 summary: Harden stale cleanup observability and failure reporting
 priority: medium
 source_type: pr-review
 source_ref: 'PR #101'
 effort: M
 branch: fix/t03-stale-cleanup-observability
+closed_date: '2026-04-13'
+closed_reason: All acceptance criteria fulfilled by PR #104 (T-03 work)
 files:
 - packages/plugins/codex-collaboration/server/containment.py
 ```

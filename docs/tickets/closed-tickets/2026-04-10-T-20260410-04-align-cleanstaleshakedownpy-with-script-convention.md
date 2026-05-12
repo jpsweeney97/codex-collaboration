@@ -3,7 +3,7 @@
 ```yaml
 id: T-20260410-04
 date: '2026-04-10'
-status: done
+status: closed
 summary: Align clean_stale_shakedown.py with script conventions
 priority: medium
 source_type: pr-review
