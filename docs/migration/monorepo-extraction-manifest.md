@@ -196,6 +196,7 @@ monorepo:
 
 **Configuration / discovery surfaces (modified in place):**
 - `pyproject.toml` — `[tool.uv.workspace] members` no longer includes `packages/plugins/codex-collaboration`; explanatory comment added
+- `uv.lock` — auto-regenerated from the `pyproject.toml` workspace-members change; the `codex-collaboration` workspace package entry and its `[[package]]` + dev-dependency stanzas were removed (49-line deletion in commit `701952b8`)
 - `.claude-plugin/marketplace.json` — `codex-collaboration` plugin entry removed
 - `.claude/CLAUDE.md` — `codex-collaboration` row removed from Packages table; migration redirect note added
 - `docs/references/README.md` — canonical-source pointer updated from `packages/plugins/codex-collaboration/references/` to new repo
@@ -250,7 +251,7 @@ The `| sort` step is critical: `find` traverses inodes in filesystem-defined ord
 | Tree | Files | SHA-256 (sorted-line aggregate) |
 |---|---|---|
 | `server/*.py` | 31 | `3e9c492ca8cd869805173cef7af6852f7b0fbe476c29f1975a6b5953b8a58309` |
-| `tests/**.py` (excluding `__pycache__`) | 67 | `abd15ddb9f440678fdffcd432c93ae14bd246a935847492eb79d7b11536fecc3` |
+| `tests/**.py` (excluding `__pycache__`) | 67 | `4645b4fa52df1649828d4c596beb67b624a2e75fd21b323610b855dbdb1af332` |
 | `tests/fixtures/**` | 197 | `fe80d8ae2aa3183adcaf1eacdbc3ecf254d2f0ca1f07f199c4fa92dfd6a56153` |
 | `skills/**` (excluding bytecode caches) | 9 (8 `SKILL.md` + 1 `codex-analytics/scripts/analytics.py`) | `0da785c2f52796e8cec27e0f80524881c2a210f5f1cdad6f3b0bf8a1a43440ab` |
 | `docs/specs/**` | 18 (12 top-level + 5 design-docs + 1 evidence JSON) | `035c777d5e4270585a61c55b6597dab506ec5e7b949ed8c235791c9e1d771b28` |
@@ -259,6 +260,8 @@ The `| sort` step is critical: `find` traverses inodes in filesystem-defined ord
 | `docs/tickets/**.md` | 19 (2 active + 17 closed) | (see file-level inventory below) |
 
 **Note on prior checksums (commit `e71db48`):** The initial manifest used `find ... -exec shasum +` without sorting, which made the aggregate non-deterministic. Three of the five prior checksums (`tests/fixtures`, `skills`, `docs/specs`) did not reproduce when independently recomputed. The hashes above are recomputed with the deterministic method and after the post-initial-commit cleanup (commits `cfcb642`, `e71db48`, and the DoD-followup commit landing this manifest revision).
+
+**Note on `tests/**.py` checksum correction (post-cleanup-branch review):** The `tests/**.py` row previously recorded `abd15ddb9f440678fdffcd432c93ae14bd246a935847492eb79d7b11536fecc3`. Adversarial review of the cleanup branch re-ran the documented method against `HEAD = 7194ffe` (67 files, command: `find tests -type f -name '*.py' -exec shasum -a 256 {} + | sort | shasum -a 256`) and obtained `4645b4fa52df1649828d4c596beb67b624a2e75fd21b323610b855dbdb1af332`. The earlier value did not reproduce under any tested interpretation of "tests/**.py" (with or without the `-name '*.py'` filter, with or without `__pycache__` exclusion). Root cause undetermined — most likely state-divergence at the time of the original computation. The table above shows the recomputed-and-verified value.
 
 **Note on handoff count (post-`3563bb3`, post-active-untrack in commit `c0d237c`):** The `docs/handoffs/**.md` row reports the **tracked sealed corpus** of 142 archived handoffs as enumerated by `git ls-files docs/handoffs/`. Three temporal frames apply:
 
