@@ -71,7 +71,13 @@ If you find code that references monorepo paths (`packages/plugins/codex-collabo
 
 ### Handoffs
 
-Session handoffs live in `docs/handoffs/`. Older handoffs migrate to `docs/handoffs/archive/`. Both directories are tracked in this repo (in contrast to the monorepo where they were gitignored).
+Session handoffs live in `docs/handoffs/`. Older handoffs migrate to `docs/handoffs/archive/`.
+
+**Policy (post-extraction, commit `3563bb3`):**
+
+- **Sealed migration corpus** — the 146 handoff markdown files migrated from the monorepo (4 active + 142 archive) are tracked in git as canonical project record. See `docs/migration/monorepo-extraction-manifest.md` for the per-file inventory. Do not delete, rewrite, or rename these files; they are the immutable migration snapshot.
+- **New session handoffs are local-only** — `.gitignore` ignores `docs/handoffs/` going forward. The rule does not untrack the sealed corpus (already-tracked files survive a new gitignore rule); it only blocks new additions. Handoff plugin outputs from `/save`, `/load`, and the `.session-state/` directory are local working memory per the plugin contract. Do not `git add -f` them in routine sessions.
+- **Promotion procedure (exceptional only)** — if a specific post-extraction handoff must become project record, promote it explicitly: (1) `git add -f docs/handoffs/<file>`, (2) commit with a `docs(handoffs):` message stating the promotion rationale, (3) add a row in `docs/migration/monorepo-extraction-manifest.md` (or a follow-on durable record) so the addition is auditable. Default: do not promote; distill durable learnings via `/distill` into `docs/learnings/` instead.
 
 ## Migration-Era Cautions
 
