@@ -117,3 +117,42 @@ def test_build_execution_resume_turn_text_repeats_test_results_requirement() -> 
 
     assert ".codex-collaboration/test-results.json" in result
     assert "status" in result
+
+
+def test_build_execution_turn_text_redacts_credential_in_objective() -> None:
+    """Defense-in-depth: even if a credential slips past the outer hook, the
+    prompt builder must not forward it verbatim to the execution turn."""
+    aws_key = "AKIAIOSFODNN7EXAMPLE"
+    result = build_execution_turn_text(
+        objective=f"Investigate {aws_key} usage in src/",
+        worktree_path="/wt/abc",
+    )
+    assert aws_key not in result
+    assert "REDACTED" in result
+
+
+def test_build_execution_resume_turn_text_redacts_credential_in_answers() -> None:
+    """Defense-in-depth: caller-supplied answers go through the same redactor
+    as advisory packets before being forwarded to Codex."""
+    from server.execution_prompt_builder import build_execution_resume_turn_text
+
+    aws_key = "AKIAIOSFODNN7EXAMPLE"
+    request = PendingServerRequest(
+        request_id="req-4",
+        runtime_id="rt-1",
+        collaboration_id="collab-1",
+        codex_thread_id="thr-1",
+        codex_turn_id="turn-1",
+        item_id="item-4",
+        kind="request_user_input",
+        requested_scope={"questions": [{"id": "q1"}]},
+        status="resolved",
+    )
+
+    result = build_execution_resume_turn_text(
+        pending_request=request,
+        answers={"q1": (f"use {aws_key}",)},
+    )
+
+    assert aws_key not in result
+    assert "REDACTED" in result

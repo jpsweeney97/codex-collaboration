@@ -11,6 +11,13 @@ from __future__ import annotations
 import json
 
 from .artifact_store import TEST_RESULTS_RECORD_RELATIVE_PATH
+# Defense-in-depth: the PreToolUse hook (codex_guard.py) is the primary
+# fail-closed boundary for credentials in caller-authored content. Prompt
+# redaction is the last layer — it catches anything that bypasses the hook
+# (matcher misconfiguration, direct MCP server invocation). _redact_text is
+# the canonical implementation with boundary-map-aware contextual bypass;
+# the leading underscore is naming convention only.
+from .context_assembly import _redact_text as redact_text
 from .models import PendingServerRequest
 
 
@@ -29,7 +36,7 @@ def build_execution_turn_text(
         "You are working in an isolated worktree. Your workspace is:\n"
         f"  {worktree_path}\n\n"
         "Objective:\n"
-        f"  {objective}\n\n"
+        f"  {redact_text(objective)}\n\n"
         "When you run verification, persist a deterministic test-results record at:\n"
         f"  {TEST_RESULTS_RECORD_RELATIVE_PATH}\n"
         "Write JSON with keys: schema_version, status, commands, summary.\n"
@@ -45,6 +52,10 @@ def build_execution_resume_turn_text(
 ) -> str:
     """Build the follow-up prompt used after Claude approves an escalation."""
 
+    # requested_scope comes from Codex's captured server request (inbound from
+    # the inner sandbox). It is intentionally NOT redacted here — that surface
+    # is a different trust direction governed by the sandbox carve-out, not
+    # the outbound credential-scan chain.
     requested_scope = json.dumps(
         pending_request.requested_scope,
         indent=2,
@@ -62,11 +73,11 @@ def build_execution_resume_turn_text(
         requested_scope,
     ]
     if answers:
-        answer_payload = json.dumps(
-            {key: {"answers": list(value)} for key, value in answers.items()},
-            indent=2,
-            sort_keys=True,
-        )
+        safe_answers = {
+            key: {"answers": [redact_text(v) for v in value]}
+            for key, value in answers.items()
+        }
+        answer_payload = json.dumps(safe_answers, indent=2, sort_keys=True)
         lines.extend(
             [
                 "",

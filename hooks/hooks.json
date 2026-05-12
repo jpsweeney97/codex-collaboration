@@ -34,7 +34,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "mcp__plugin_codex-collaboration_codex-collaboration__codex\\.consult|mcp__plugin_codex-collaboration_codex-collaboration__codex\\.dialogue\\.start|mcp__plugin_codex-collaboration_codex-collaboration__codex\\.dialogue\\.reply",
+        "matcher": "mcp__plugin_codex-collaboration_codex-collaboration__codex\\.consult|mcp__plugin_codex-collaboration_codex-collaboration__codex\\.dialogue\\.start|mcp__plugin_codex-collaboration_codex-collaboration__codex\\.dialogue\\.reply|mcp__plugin_codex-collaboration_codex-collaboration__codex\\.delegate\\.start|mcp__plugin_codex-collaboration_codex-collaboration__codex\\.delegate\\.decide",
         "hooks": [
           {
             "type": "command",
