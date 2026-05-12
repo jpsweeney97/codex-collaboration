@@ -508,8 +508,10 @@ Without `logging.basicConfig` (which F18 will provide), Python's logging default
 
 `prune_audit_logs()` is safe to call multiple times. Each invocation:
 - Recomputes `cutoff` from the current `_now()` (or explicit `now=`).
+- Clears `_seen_sets_initialized = False` before any disk mutation (invalidate-before-disk-mutation discipline — see §5.6).
 - Rebuilds local seen-sets from scratch.
-- Atomically reassigns sets and writes rewritten files only on success.
+- Reassigns in-memory seen-sets and sets `_seen_sets_initialized = True` only after both file passes complete without raising.
+- Rewrites each file atomically per file (§5.5). A failed later-file prune can leave an earlier-file already rewritten, putting the canonical files in a mixed-prune state (§2 Contract — per-file, not pair-wise). Append correctness across that state is preserved because the cleared flag forces the next `append_*_once` to reload from disk.
 
 A second prune after time has advanced correctly evicts newly-expired keys.
 
