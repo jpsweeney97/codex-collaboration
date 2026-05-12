@@ -22,14 +22,17 @@ This document specifies the design for closing F4 by implementing startup prunin
 After this slice lands, the following hold:
 
 - `audit/events.jsonl` and `analytics/outcomes.jsonl` are pruned at plugin startup. Records with parseable timezone-aware ISO 8601 timestamps older than 30 days from the current time are dropped.
+- Outcomes (`analytics/outcomes.jsonl`) are treated in this slice as **operational diagnostics with a 30-day operational horizon**, not as long-term analytics history. This is an explicit data-class decision: if a future feature consumes outcomes for long-term analytics, a separate retention class must be introduced **before** the consuming feature ships. Records dropped by this slice's prune are not recoverable.
 - Pruning is a pure filter: retained records are written back as their original raw lines, byte-for-byte, never re-serialized.
-- Records with missing, non-string, unparseable, or timezone-naive `timestamp` fields are retained (retain-on-uncertainty principle — ambiguous records are not silently erased).
+- Records with missing, non-string, unparseable, or timezone-naive `timestamp` fields are retained (retain-on-uncertainty principle — ambiguous records are not silently erased). These records are **TTL-exempt by design**: the 30-day TTL applies only to records with parseable, timezone-aware timestamps, so a sufficiently corrupt audit or outcome line can survive past the 30-day window indefinitely. `PruneSummary.audit_retained_malformed` and `PruneSummary.outcomes_retained_malformed` count these records each pass; they share the observability conditional described in the bootstrap bullet below.
 - Records that fail to parse as JSON, or parse as non-dict shapes, are retained as raw lines.
 - Blank lines are removed during pruning (not records; not subject to retain-on-uncertainty).
 - The three `append_*_once` methods consult an in-memory dedup set keyed on natural fields. Set membership replaces the previous linear file scan. Sets are atomically rebuilt during prune and atomically loaded on first direct-construction use.
-- A clock seam (`OperationJournal(..., clock=Callable[[], datetime])`) governs every "now" the journal uses. Naive clock outputs fail fast with `RuntimeError`. Production code does not pass concrete `now=` values; tests inject fake clocks.
+- A clock seam (`OperationJournal(..., clock=Callable[[], datetime])`) governs every "now" the journal uses. Naive clock outputs fail fast with `ValueError`. Production code does not pass concrete `now=` values; tests inject fake clocks.
 - Atomic file replacement guarantees: target file untouched on pre-replace failure; POSIX-atomic swap on `os.replace` success. Does *not* directory-fsync — post-rename durability across power-fail is not asserted, matching the existing `compact()` and `_write_markers` pattern.
-- The plugin bootstrap invokes pruning. Prune failure (`OSError`) is logged as a warning and does not block startup. Append correctness is preserved through `_ensure_seen_sets_loaded()`.
+- **Atomicity is per file, not pair-wise.** A successful prune of `events.jsonl` followed by a failed prune of `outcomes.jsonl` leaves the canonical files in a mixed-prune state. Both files are independent retention surfaces; the next startup re-runs the full prune. Append correctness is preserved across the mixed state because `_ensure_seen_sets_loaded()` reads disk as the source of truth when the in-memory atomic swap is skipped.
+- **Single-writer assumption.** Exactly one MCP process owns a given `plugin_data_path` at a time. Concurrent prune from two processes against the same data directory is undefined and unsupported — the fixed-suffix temp file `<path>.tmp` would collide. This matches the existing `compact()` and `_write_markers` patterns in `OperationJournal`.
+- The plugin bootstrap invokes pruning. Prune failure (`OSError`) invokes `logger.warning(..., exc_info=True)` and does not block startup. **Until F18 lands `logging.basicConfig`, that warning is discarded by Python's default logging configuration; operator visibility requires F18 (or `caplog` in tests).** Append correctness is preserved through `_ensure_seen_sets_loaded()` regardless of logging state.
 
 ## 3. Scope
 
@@ -287,6 +290,8 @@ def prune_audit_logs(self, now: datetime | None = None) -> PruneSummary:
     )
 ```
 
+If `_prune_jsonl_pass` for `outcomes.jsonl` raises after `events.jsonl` has been successfully replaced, the journal's in-memory seen-sets are *not* reassigned (the `self._audit_seen = new_audit_seen` lines are unreached). On disk, `events.jsonl` reflects the prune; `outcomes.jsonl` is untouched. The next `append_*_once` consults `_ensure_seen_sets_loaded()`, which reads disk as the source of truth and populates from the mixed state correctly. The next prune cycle re-runs both files. This per-file-not-pair-wise transaction boundary is named in §2 Contract.
+
 ### 5.2a Population helpers
 
 The `populate` callback used by `_prune_jsonl_pass` (and the equivalent reader path in `_ensure_seen_sets_loaded`) is one of two module-level free functions:
@@ -515,6 +520,18 @@ A small fixture helper keeps tests tight:
 def fixed_clock(at: datetime) -> Callable[[], datetime]:
     return lambda: at
 ```
+
+### 6.5 Operating envelope
+
+This design optimizes for the following deployment shape:
+
+- Single-user, single MCP process per `plugin_data_path` (see §2 Contract — single-writer assumption).
+- Hours-scale sessions, not multi-day.
+- Low-to-moderate volume: estimated steady-state per 30-day window is ~1k–10k records each for `events.jsonl` and `outcomes.jsonl`.
+- Resident dedup sets across all three types: ~1 MB upper bound at the high end of the volume estimate.
+- Startup prune + population: single linear pass per file, expected milliseconds at this volume.
+
+Deployments outside this envelope (multi-user, multi-day sessions, sustained high-volume traffic) may need a different retention substrate (incremental prune, paged dedup, on-disk seen-set persistence). The current design intentionally optimizes for the named envelope; the seen-set substrate is the first refactor target if those limits are hit. No volume or latency metrics are emitted in v1 — operator visibility into envelope adherence rides F18 alongside the prune-summary logging.
 
 ## 7. Spec Changes to `docs/specs/recovery-and-journal.md`
 
