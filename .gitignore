@@ -42,6 +42,7 @@ tmp/
 CLAUDE.local.md
 .claude/sessions/
 .claude/worktrees/
+.claude/settings.local.json
 
 # Handoffs (local-only working memory per handoff plugin contract).
 # The 146 migrated handoffs (4 active + 142 archive) remain tracked
