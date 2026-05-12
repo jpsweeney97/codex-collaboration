@@ -73,7 +73,7 @@ If you find code that references monorepo paths (`packages/plugins/codex-collabo
 
 Session handoffs live in `docs/handoffs/`. Older handoffs migrate to `docs/handoffs/archive/`.
 
-**Policy (post-extraction `.gitignore` sealed at commit `3563bb3`; active-handoff reclassification in this revision):**
+**Policy (post-extraction `.gitignore` sealed at commit `3563bb3`; active-handoff reclassification in commit `c0d237c`):**
 
 - **Sealed migration corpus (142 archived handoffs)** — the markdown files in `docs/handoffs/archive/` migrated from the monorepo are tracked in git as canonical historical record. See `docs/migration/monorepo-extraction-manifest.md` for the per-file inventory. Do not delete, rewrite, or rename these files; they are the immutable migration snapshot.
 - **Migrated active handoffs are local-only working memory (machine-specific)** — the 4 migrated handoffs at `docs/handoffs/` root (outside `archive/`) were tracked at extraction time, then explicitly untracked via `git rm --cached` in commit `c0d237c` because they are legitimately active session handoffs eligible for future `/load`, not sealed historical record. Their on-disk presence is machine-specific: they remain on the machine where the untrack ran, and a fresh clone of `HEAD` does not include them. Recover from history when needed: `git restore --source=ed98d3b -- docs/handoffs/<name>`.
