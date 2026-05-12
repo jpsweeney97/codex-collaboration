@@ -128,10 +128,11 @@ A file is **active** if it governs current behavior, current status, current unr
 
 In the monorepo, `docs/handoffs/` is gitignored (`.gitignore` entry: `docs/handoffs/`). Because the monorepo never tracked these files in git, "history preservation deferred" is moot for handoffs — they have no git history to preserve.
 
-**Handoff tracking policy in this repo:**
+**Handoff tracking policy in this repo (three temporal frames):**
 
-- **At extraction time** (commits `b3c1f2c`..`9f68e02`), the handoff directories were tracked so the migrated corpus could enter git history as canonical project record.
-- **Post-extraction** (commit `3563bb3`), `docs/handoffs/` is gitignored going forward. The 146 migrated handoff files remain as a sealed tracked corpus — gitignore rules do not untrack already-tracked files — while new session handoffs become local-only working memory per the handoff plugin contract.
+- **At extraction time** (commits `b3c1f2c`..`9f68e02`), the handoff directories were tracked so the migrated corpus could enter git history as canonical project record. 146 files: 4 at `docs/handoffs/` root + 142 in `docs/handoffs/archive/`.
+- **Post-extraction `.gitignore` (commit `3563bb3`)** gitignored `docs/handoffs/` going forward. All 146 migrated files remained tracked (gitignore rules do not untrack already-tracked files); new session handoffs became local-only working memory per the handoff plugin contract.
+- **Active-handoff reclassification (this revision)** explicitly untracked the 4 migrated active handoffs at `docs/handoffs/` root via `git rm --cached`. Rationale: they are legitimately active session handoffs eligible for future `/load`, not sealed historical record. The sealed migration corpus is now the 142 archived handoffs only; the 4 active migrated handoffs live under the same local-only policy as new session handoffs.
 - See `AGENTS.md` Handoffs section for the operational policy and the explicit promotion procedure that lets an exceptional post-extraction handoff become project record.
 
 Excluded from migration: 12 non-codex-collaboration archived handoffs (5 about the `handoff` plugin's `handoff-no-commit` refactor, 7 about the public claude-code-skills repo / public-skills-repo build) and 1 recent non-codex handoff (page-turner browser extension design). See the file-level handoff exclusions table below for the precise list.
@@ -151,7 +152,7 @@ Excluded from migration: 12 non-codex-collaboration archived handoffs (5 about t
 |---|---|
 | `README.md` | Standalone-repo README, declares sole authority |
 | `AGENTS.md` | Instructions for AI coding agents |
-| `.gitignore` | Standalone repo's gitignore. At extraction, handoffs were tracked (not gitignored). Post-extraction (commit `3563bb3`), `docs/handoffs/` is gitignored going forward; the 146 migrated handoff files remain as a sealed tracked corpus. See `AGENTS.md` Handoffs section for the operational policy. |
+| `.gitignore` | Standalone repo's gitignore. At extraction, handoffs were tracked (not gitignored). Post-extraction (commit `3563bb3`), `docs/handoffs/` is gitignored going forward. In this revision, the 4 migrated active handoffs were explicitly untracked (`git rm --cached`); the 142 archived migration handoffs remain as the sealed tracked corpus. See `AGENTS.md` Handoffs section for the operational policy. |
 | `.github/workflows/ci.yml` | CI workflow (uv + ruff + pytest + JSON validation) |
 | `scripts/check` | Local convenience script mirroring CI gates |
 | `docs/migration/monorepo-extraction-manifest.md` | This file |
@@ -233,12 +234,18 @@ The `| sort` step is critical: `find` traverses inodes in filesystem-defined ord
 | `tests/fixtures/**` | 197 | `fe80d8ae2aa3183adcaf1eacdbc3ecf254d2f0ca1f07f199c4fa92dfd6a56153` |
 | `skills/**` (excluding bytecode caches) | 9 (8 `SKILL.md` + 1 `codex-analytics/scripts/analytics.py`) | `0da785c2f52796e8cec27e0f80524881c2a210f5f1cdad6f3b0bf8a1a43440ab` |
 | `docs/specs/**` | 18 (12 top-level + 5 design-docs + 1 evidence JSON) | `035c777d5e4270585a61c55b6597dab506ec5e7b949ed8c235791c9e1d771b28` |
-| `docs/handoffs/**.md` (sealed tracked corpus per `git ls-files`) | 146 (4 active + 142 archive) | (see file-level inventory below) |
+| `docs/handoffs/**.md` (sealed tracked corpus per `git ls-files`, post-active-untrack) | 142 (archived migration handoffs only; 4 active migrated handoffs explicitly untracked in this revision) | (see file-level inventory below) |
 | `docs/tickets/**.md` | 19 (2 active + 17 closed) | (see file-level inventory below) |
 
 **Note on prior checksums (commit `e71db48`):** The initial manifest used `find ... -exec shasum +` without sorting, which made the aggregate non-deterministic. Three of the five prior checksums (`tests/fixtures`, `skills`, `docs/specs`) did not reproduce when independently recomputed. The hashes above are recomputed with the deterministic method and after the post-initial-commit cleanup (commits `cfcb642`, `e71db48`, and the DoD-followup commit landing this manifest revision).
 
-**Note on handoff count (post-`3563bb3`):** The `docs/handoffs/**.md` row reports the **tracked sealed corpus** of 146 files (4 active + 142 archive) as enumerated by `git ls-files docs/handoffs/`. Post-extraction, `docs/handoffs/` is gitignored, so the filesystem (`find docs/handoffs -name '*.md'`) may show a higher count when local-only session handoffs exist (e.g., outputs from `/save`, `/load`, or `.session-state/`). The 146 figure refers only to the sealed migration corpus that entered git history at extraction — it does not float with local session activity. See `AGENTS.md` Handoffs section for the operational policy and promotion procedure.
+**Note on handoff count (post-`3563bb3`, post-active-untrack in this revision):** The `docs/handoffs/**.md` row reports the **tracked sealed corpus** of 142 archived handoffs as enumerated by `git ls-files docs/handoffs/`. Three temporal frames apply:
+
+1. **At extraction:** 146 tracked (4 active + 142 archive). All migrated handoffs entered git history together.
+2. **Post-`3563bb3`:** still 146 tracked. The new `.gitignore` rule did not retroactively untrack existing files; it only blocked new additions.
+3. **Post-active-untrack (this revision):** 142 tracked. The 4 migrated active handoffs were explicitly untracked via `git rm --cached` to honor their working-memory semantics (eligible for `/load`). They remain on disk as local files, indistinguishable from new session handoffs under the `.gitignore` rule.
+
+The 142 figure refers only to the sealed historical corpus and does not float with local session activity. `find docs/handoffs -name '*.md'` may show a higher count due to local-only files (the 4 migrated active handoffs at root + any new session handoffs + post-load archives). See `AGENTS.md` Handoffs section for the operational policy and promotion procedure.
 
 ## File-Level Inventory (DoD §Manifest, path-by-path)
 
@@ -268,9 +275,11 @@ All rows: classification `migrated-historical`. Rationale: codex-collaboration-e
 | `2026-04-23-deferred-same-turn-approval-response.md` |
 | `2026-05-11-codex-collaboration-needs-escalation-discard-recovery.md` |
 
-#### File-level inventory: active handoffs (4)
+#### File-level inventory: active migrated handoffs (4, now untracked)
 
-All rows: classification `migrated-active`. Rationale: recent codex-collaboration session handoff still operationally relevant. Old path `docs/handoffs/<name>` (gitignored in monorepo), new path `docs/handoffs/<name>` (tracked in this repo as part of the sealed migration corpus; post-extraction policy gitignores new handoffs — see the Inventory note on the post-`3563bb3` `.gitignore` change).
+All rows: classification `migrated-active-untracked`. Rationale: legitimately active codex-collaboration session handoff, eligible for future `/load`. At extraction these were tracked (incidentally, along with the rest of the corpus); in this revision they were untracked via `git rm --cached` to honor their working-memory semantics. They remain on disk locally; the `.gitignore` rule (`docs/handoffs/`) now applies. If a future session loads one, the `mv` to `archive/` proceeds cleanly with no git regression.
+
+Old path `docs/handoffs/<name>` (gitignored in monorepo), new path `docs/handoffs/<name>` (on disk in this repo, untracked).
 
 | File |
 |---|
@@ -281,7 +290,7 @@ All rows: classification `migrated-active`. Rationale: recent codex-collaboratio
 
 #### File-level inventory: archived handoffs (142)
 
-All rows: classification `migrated-historical`. Rationale: codex-collaboration-era session handoff; project record. Old path `docs/handoffs/archive/<name>` (gitignored in monorepo), new path `docs/handoffs/archive/<name>` (tracked in this repo as part of the sealed migration corpus; post-extraction policy gitignores new handoffs — see the Inventory note on the post-`3563bb3` `.gitignore` change).
+All rows: classification `migrated-historical`. Rationale: codex-collaboration-era session handoff; project record. Old path `docs/handoffs/archive/<name>` (gitignored in monorepo), new path `docs/handoffs/archive/<name>` (tracked in this repo as part of the sealed migration corpus; the active-handoff reclassification in this revision does not affect these — they remain the canonical sealed historical corpus).
 
 | File |
 |---|
