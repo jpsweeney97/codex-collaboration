@@ -396,8 +396,19 @@ class OperationJournal:
     def _read_markers(self) -> dict[str, dict[str, str]]:
         if not self._markers_path.exists():
             return {}
-        with self._markers_path.open(encoding="utf-8") as handle:
-            loaded = json.load(handle)
+        try:
+            with self._markers_path.open(encoding="utf-8") as handle:
+                loaded = json.load(handle)
+        except json.JSONDecodeError:
+            # A crash mid-write (under the pre-atomic path) or external
+            # corruption left an unreadable file. Stale-marker state is
+            # ephemeral session data — treat as absent and clear so reads
+            # start fresh. Any needed marker re-emits on the next promotion.
+            try:
+                self._markers_path.unlink()
+            except OSError:
+                pass
+            return {}
         if not isinstance(loaded, dict):
             raise ValueError(
                 "Operation journal read failed: stale marker file is not an object. "
@@ -406,9 +417,18 @@ class OperationJournal:
         return loaded
 
     def _write_markers(self, markers: dict[str, dict[str, str]]) -> None:
-        with self._markers_path.open("w", encoding="utf-8") as handle:
+        # Spec classifies the marker file as crash-recovery state. Write
+        # to a temp file, fsync, then atomically replace — same pattern
+        # `compact()` uses for the operation journal. Direct truncate-then-
+        # write leaves the file empty or partial on crash, which both
+        # silently loses the marker AND breaks subsequent reads.
+        tmp_path = self._markers_path.with_name(self._markers_path.name + ".tmp")
+        with tmp_path.open("w", encoding="utf-8") as handle:
             json.dump(markers, handle, indent=2, sort_keys=True)
             handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, self._markers_path)
 
 
 def _normalize_repo_root_key(repo_root: Path | str) -> str:

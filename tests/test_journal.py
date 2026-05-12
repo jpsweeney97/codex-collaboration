@@ -763,6 +763,73 @@ def test_load_stale_marker_handles_old_schema_gracefully(tmp_path: Path) -> None
     assert str(tmp_path) not in loaded
 
 
+def test_write_stale_marker_is_atomic(tmp_path: Path) -> None:
+    """Marker writes must use temp-rename so crash mid-write cannot corrupt.
+
+    Asserts the post-write disk state: target file present, valid JSON, no
+    stray .tmp left behind. This is the durability contract recovery code
+    depends on.
+    """
+    plugin_data = tmp_path / "plugin-data"
+    journal = OperationJournal(plugin_data)
+    journal.write_stale_marker(
+        StaleAdvisoryContextMarker(
+            repo_root=str(tmp_path.resolve()),
+            promoted_artifact_hash="hash-1",
+            job_id="job-1",
+            recorded_at="2026-03-27T15:00:00Z",
+        )
+    )
+
+    markers_path = plugin_data / "journal" / "stale_advisory_context.json"
+    assert markers_path.exists()
+    parsed = json.loads(markers_path.read_text(encoding="utf-8"))
+    assert isinstance(parsed, dict)
+    assert str(tmp_path.resolve()) in parsed
+
+    tmp_marker = markers_path.with_name(markers_path.name + ".tmp")
+    assert not tmp_marker.exists(), (
+        f"temp file must be renamed away after atomic write; saw {tmp_marker}"
+    )
+
+
+def test_load_stale_marker_recovers_from_corrupt_file(tmp_path: Path) -> None:
+    """A truncated/corrupt markers file must not hard-fail the advisory path.
+
+    Reproduces the crash-mid-write failure mode from before the atomic-write
+    fix: subsequent reads see invalid JSON. The fix treats this as an absent
+    marker and clears the corrupt file so the next write starts fresh.
+    """
+    plugin_data = tmp_path / "plugin-data"
+    plugin_data.mkdir(parents=True, exist_ok=True)
+    journal_dir = plugin_data / "journal"
+    journal_dir.mkdir(parents=True, exist_ok=True)
+    markers_path = journal_dir / "stale_advisory_context.json"
+
+    # Simulate crash mid-write: file truncated to a partial JSON prefix.
+    markers_path.write_text('{"some-key": {"repo_root":', encoding="utf-8")
+
+    journal = OperationJournal(plugin_data)
+    result = journal.load_stale_marker(tmp_path)
+    assert result is None
+    assert not markers_path.exists(), (
+        "corrupt marker file must be cleared so subsequent writes start fresh"
+    )
+
+    # Writing a fresh marker after corruption recovery still works.
+    journal.write_stale_marker(
+        StaleAdvisoryContextMarker(
+            repo_root=str(tmp_path.resolve()),
+            promoted_artifact_hash="hash-fresh",
+            job_id="job-fresh",
+            recorded_at="2026-03-27T15:00:00Z",
+        )
+    )
+    marker = journal.load_stale_marker(tmp_path)
+    assert marker is not None
+    assert marker.promoted_artifact_hash == "hash-fresh"
+
+
 class TestDelegationOutcomeJournal:
     def test_append_delegation_outcome_writes_to_outcomes_jsonl(
         self, tmp_path: Path
