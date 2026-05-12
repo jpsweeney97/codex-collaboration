@@ -109,6 +109,23 @@ A file is **active** if it governs current behavior, current status, current unr
 | `docs/assessments/2026-04-29-codex-collaboration-verified-drift-report.md` | `docs/assessments/...` | Drift report (final verdict: all 9 findings addressed) |
 | `docs/decisions/2026-04-29-codex-collaboration-drift-synthesis-recovery.md` | `docs/decisions/...` | Drift recovery decision record |
 
+#### Diagnostics (mapped to `docs/diagnostics/`)
+
+| Old path (in monorepo) | New path (in this repo) | Rationale |
+|---|---|---|
+| `docs/diagnostics/2026-04-28-delegate-execution-diagnostic.md` | `docs/diagnostics/...` | T-01 delegate-execution run record; cited by 2 active tickets + 1 closed remediation ticket + the drift assessment + the drift-recovery decision (with specific line-number references) |
+| `docs/diagnostics/2026-04-30-dialogue-reply-extraction-post-patch.md` | `docs/diagnostics/...` | T-20260416-01 post-patch live-verification evidence |
+| `docs/diagnostics/2026-05-01-codex-app-server-client-platform-exploration.md` | `docs/diagnostics/...` | App-server client-platform exploration packet (cited by the rebaseline architecture note + Task 0 of the rebaseline plan) |
+| `docs/diagnostics/2026-05-01-codex-app-server-scratch-home-runtime-probes.md` | `docs/diagnostics/...` | Scratch-home runtime probe packet |
+| `docs/diagnostics/2026-05-01-codex-app-server-materialized-thread-and-server-request-probes.md` | `docs/diagnostics/...` | Materialized-thread + server-request probe packet |
+| `docs/diagnostics/2026-05-01-codex-app-server-server-request-envelope-probes.md` | `docs/diagnostics/...` | Server-request envelope probe packet (post envelope-overclaim-fix per PR #128 / standalone repo handoff record) |
+| `docs/diagnostics/codex-app-server-client-platform-exploration.json` | `docs/diagnostics/...` | Sibling JSON to the exploration packet |
+| `docs/diagnostics/codex-app-server-scratch-home-runtime-probes.json` | `docs/diagnostics/...` | Sibling JSON to the scratch-home packet |
+| `docs/diagnostics/codex-app-server-materialized-thread-and-server-request-probes.json` | `docs/diagnostics/...` | Sibling JSON to the materialized-thread packet |
+| `docs/diagnostics/codex-app-server-server-request-envelope-probes.json` | `docs/diagnostics/...` | Sibling JSON to the envelope packet (post envelope-overclaim-fix per PR #128 / standalone repo handoff record) |
+
+**Reclassification note:** Commit `701952b8` initially placed these 10 files in the `left-historical` bucket (per the "diagnostics" entry in its commit-message snapshot-true list). Adversarial review of the cleanup branch surfaced that they are actively cited by the current rebaseline architecture note, Task 0 of the rebaseline implementation plan, the envelope-overclaim-fix plan, 2 active tickets, the drift assessment, the drift-recovery decision record, and several closed tickets — meeting the active-classification criterion in the [Classification Vocabulary](#classification-vocabulary) section. Reclassified from `left-historical` to `migrated-active`; moved from monorepo to this repo in monorepo commit `25a5afaf` (chore branch follow-up to `701952b8`).
+
 #### Tickets
 
 | Old path | New path | Rationale |
@@ -171,9 +188,11 @@ These artifacts record past work that is not used to determine current behavior 
 
 ### Redirected (current-facing monorepo surfaces replaced with pointers)
 
-Applied in monorepo on branch `chore/extract-codex-collaboration`, commit
-`701952b822a7cb5594d2fde648cec428f5c6d1ae`. Full list of redirected paths
-in monorepo:
+Applied in monorepo on branch `chore/extract-codex-collaboration`, commits
+`701952b822a7cb5594d2fde648cec428f5c6d1ae` (initial cleanup) and
+`25a5afaf4c1b617e2c2e511231aae212dda26be7` (diagnostics MIGRATED.md
+follow-up after adversarial review). Full list of redirected paths in
+monorepo:
 
 **Configuration / discovery surfaces (modified in place):**
 - `pyproject.toml` — `[tool.uv.workspace] members` no longer includes `packages/plugins/codex-collaboration`; explanatory comment added
@@ -181,9 +200,10 @@ in monorepo:
 - `.claude/CLAUDE.md` — `codex-collaboration` row removed from Packages table; migration redirect note added
 - `docs/references/README.md` — canonical-source pointer updated from `packages/plugins/codex-collaboration/references/` to new repo
 
-**Package + spec directories demoted to MIGRATED stub:**
-- `packages/plugins/codex-collaboration/` — entire dir contents replaced with `MIGRATED.md`
-- `docs/superpowers/specs/codex-collaboration/` — entire dir contents replaced with `MIGRATED.md`
+**Directories demoted to MIGRATED stub:**
+- `packages/plugins/codex-collaboration/` — entire dir contents replaced with `MIGRATED.md` (package directory; commit `701952b8`)
+- `docs/superpowers/specs/codex-collaboration/` — entire dir contents replaced with `MIGRATED.md` (spec directory; commit `701952b8`)
+- `docs/diagnostics/` — all 10 codex-collaboration diagnostic packets removed; directory-level `MIGRATED.md` added (commit `25a5afaf`). At the time of cleanup, `git ls-files docs/diagnostics/` listed only the 10 codex-collaboration files enumerated under [Diagnostics (mapped to `docs/diagnostics/`)](#diagnostics-mapped-to-docsdiagnostics) above — so directory-level rather than per-file redirect.
 
 **Current-facing single docs replaced with redirect content:**
 - `docs/status/codex-collaboration-current-state.md`
@@ -234,6 +254,7 @@ The `| sort` step is critical: `find` traverses inodes in filesystem-defined ord
 | `tests/fixtures/**` | 197 | `fe80d8ae2aa3183adcaf1eacdbc3ecf254d2f0ca1f07f199c4fa92dfd6a56153` |
 | `skills/**` (excluding bytecode caches) | 9 (8 `SKILL.md` + 1 `codex-analytics/scripts/analytics.py`) | `0da785c2f52796e8cec27e0f80524881c2a210f5f1cdad6f3b0bf8a1a43440ab` |
 | `docs/specs/**` | 18 (12 top-level + 5 design-docs + 1 evidence JSON) | `035c777d5e4270585a61c55b6597dab506ec5e7b949ed8c235791c9e1d771b28` |
+| `docs/diagnostics/**` | 10 (6 .md + 4 .json) | `0275cf81fdf918e20ac2d9c37b6214ccbed85c056d0d9ca4cb1ece7ecac8b35f` |
 | `docs/handoffs/**.md` (sealed tracked corpus per `git ls-files`, post-active-untrack) | 142 (archived migration handoffs only; 4 active migrated handoffs explicitly untracked in commit `c0d237c`) | (see file-level inventory below) |
 | `docs/tickets/**.md` | 19 (2 active + 17 closed) | (see file-level inventory below) |
 
