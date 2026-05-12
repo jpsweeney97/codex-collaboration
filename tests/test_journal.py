@@ -830,6 +830,94 @@ def test_load_stale_marker_recovers_from_corrupt_file(tmp_path: Path) -> None:
     assert marker.promoted_artifact_hash == "hash-fresh"
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "[]",  # valid JSON, top-level list
+        '"a string"',  # valid JSON, top-level scalar
+        "null",  # valid JSON, null
+        "42",  # valid JSON, integer
+    ],
+)
+def test_load_stale_marker_treats_wrong_top_level_shape_as_absent(
+    tmp_path: Path, payload: str
+) -> None:
+    """Valid JSON with a non-dict top level is treated as ephemeral corruption.
+
+    The F5 contract is that stale-marker corruption — however it occurred —
+    must not crash recovery or advisory calls. The earlier fix only handled
+    JSONDecodeError; this covers the valid-JSON-wrong-shape case.
+    """
+    plugin_data = tmp_path / "plugin-data"
+    plugin_data.mkdir(parents=True, exist_ok=True)
+    journal_dir = plugin_data / "journal"
+    journal_dir.mkdir(parents=True, exist_ok=True)
+    markers_path = journal_dir / "stale_advisory_context.json"
+    markers_path.write_text(payload, encoding="utf-8")
+
+    journal = OperationJournal(plugin_data)
+    assert journal.load_stale_marker(tmp_path) is None
+    assert not markers_path.exists(), (
+        f"corrupt top-level payload {payload!r} must be cleared on read"
+    )
+
+
+def test_load_stale_marker_drops_non_dict_per_repo_record(tmp_path: Path) -> None:
+    """A per-repo value that isn't a dict (e.g., int) is treated as absent."""
+    plugin_data = tmp_path / "plugin-data"
+    plugin_data.mkdir(parents=True, exist_ok=True)
+    journal_dir = plugin_data / "journal"
+    journal_dir.mkdir(parents=True, exist_ok=True)
+    markers_path = journal_dir / "stale_advisory_context.json"
+    repo_key = str(tmp_path.resolve())
+    markers_path.write_text(
+        json.dumps({repo_key: 42}), encoding="utf-8"
+    )
+
+    journal = OperationJournal(plugin_data)
+    assert journal.load_stale_marker(tmp_path) is None
+
+    # The corrupt entry must be dropped so subsequent reads start clean.
+    loaded = json.loads(markers_path.read_text(encoding="utf-8"))
+    assert repo_key not in loaded
+
+
+def test_load_stale_marker_drops_record_with_invalid_fields(tmp_path: Path) -> None:
+    """A per-repo dict missing required fields or carrying unknown ones is dropped.
+
+    StaleAdvisoryContextMarker(**record) would raise TypeError; the fix
+    catches it and treats the record as absent. Covers both missing
+    `recorded_at` and unknown surplus keys.
+    """
+    plugin_data = tmp_path / "plugin-data"
+    plugin_data.mkdir(parents=True, exist_ok=True)
+    journal_dir = plugin_data / "journal"
+    journal_dir.mkdir(parents=True, exist_ok=True)
+    markers_path = journal_dir / "stale_advisory_context.json"
+    repo_key = str(tmp_path.resolve())
+
+    # Has the keys the schema-check looks for, but no recorded_at — the
+    # dataclass constructor raises TypeError.
+    markers_path.write_text(
+        json.dumps(
+            {
+                repo_key: {
+                    "repo_root": repo_key,
+                    "promoted_artifact_hash": "hash-1",
+                    "job_id": "job-1",
+                    # recorded_at deliberately omitted
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    journal = OperationJournal(plugin_data)
+    assert journal.load_stale_marker(tmp_path) is None
+    loaded = json.loads(markers_path.read_text(encoding="utf-8"))
+    assert repo_key not in loaded
+
+
 class TestDelegationOutcomeJournal:
     def test_append_delegation_outcome_writes_to_outcomes_jsonl(
         self, tmp_path: Path

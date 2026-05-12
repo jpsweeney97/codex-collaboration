@@ -211,21 +211,37 @@ class OperationJournal:
         return self._plugin_data_path
 
     def load_stale_marker(self, repo_root: Path) -> StaleAdvisoryContextMarker | None:
-        """Return the persisted stale marker for `repo_root`, if present."""
+        """Return the persisted stale marker for `repo_root`, if present.
+
+        Stale-marker state is ephemeral session-scoped data. Any per-record
+        corruption (wrong type, old schema, missing fields, unknown fields)
+        is treated as absent and dropped — the next promotion re-emits any
+        marker that is genuinely needed.
+        """
 
         markers = self._read_markers()
         key = _normalize_repo_root_key(repo_root)
         record = markers.get(key)
         if record is None:
             return None
-        # Defensive: old-schema markers have "promoted_head" instead of
-        # "promoted_artifact_hash" and lack "job_id". Treat as absent and
-        # clear — stale markers are ephemeral session-scoped data.
+        if not isinstance(record, dict):
+            del markers[key]
+            self._write_markers(markers)
+            return None
+        # Old-schema markers have "promoted_head" instead of
+        # "promoted_artifact_hash" and lack "job_id".
         if "promoted_artifact_hash" not in record or "job_id" not in record:
             del markers[key]
             self._write_markers(markers)
             return None
-        return StaleAdvisoryContextMarker(**record)
+        try:
+            return StaleAdvisoryContextMarker(**record)
+        except TypeError:
+            # Record has unexpected fields, missing required fields, or
+            # incompatible value types. Drop and return absent.
+            del markers[key]
+            self._write_markers(markers)
+            return None
 
     def write_stale_marker(self, marker: StaleAdvisoryContextMarker) -> None:
         """Persist or replace a stale marker for its repo root."""
@@ -400,21 +416,23 @@ class OperationJournal:
             with self._markers_path.open(encoding="utf-8") as handle:
                 loaded = json.load(handle)
         except json.JSONDecodeError:
-            # A crash mid-write (under the pre-atomic path) or external
-            # corruption left an unreadable file. Stale-marker state is
-            # ephemeral session data — treat as absent and clear so reads
-            # start fresh. Any needed marker re-emits on the next promotion.
-            try:
-                self._markers_path.unlink()
-            except OSError:
-                pass
+            self._clear_corrupt_markers_file()
             return {}
         if not isinstance(loaded, dict):
-            raise ValueError(
-                "Operation journal read failed: stale marker file is not an object. "
-                f"Got: {loaded!r:.100}"
-            )
+            # Valid JSON but the wrong top-level shape (e.g. list, scalar,
+            # null). Stale-marker state is ephemeral; treat as absent and
+            # clear so the next write starts fresh. Any needed marker
+            # re-emits on the next promotion.
+            self._clear_corrupt_markers_file()
+            return {}
         return loaded
+
+    def _clear_corrupt_markers_file(self) -> None:
+        """Remove the markers file if present, swallowing missing-file errors."""
+        try:
+            self._markers_path.unlink()
+        except OSError:
+            pass
 
     def _write_markers(self, markers: dict[str, dict[str, str]]) -> None:
         # Spec classifies the marker file as crash-recovery state. Write
