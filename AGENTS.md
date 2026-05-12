@@ -2,6 +2,10 @@
 
 Instructions for AI coding agents working in this repository.
 
+codex-collaboration is a Claude Code plugin, currently in standalone repo form at `/Users/jp/Projects/active/codex-collaboration`. The plugin gives Claude a structured second-opinion lane to OpenAI Codex via three capabilities (consultation, dialogue, delegation) across two capability classes (advisory, execution).
+
+This repository is the development environment for the plugin: it contains the MCP server (~14K LOC Python), specs, hooks, skills, agents, scripts, and tests (1101 tests). Source paths live at the repo root (no `packages/plugins/...` prefix).
+
 ## Authority
 
 This repository is the **sole authority** for `codex-collaboration` source, tests, specs, status, tickets, plans, and operational documentation. It was extracted from `claude-code-tool-dev` on 2026-05-11.
