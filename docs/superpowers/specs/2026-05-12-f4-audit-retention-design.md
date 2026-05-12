@@ -23,7 +23,7 @@ After this slice lands, the following hold:
 
 - `audit/events.jsonl` and `analytics/outcomes.jsonl` are pruned at plugin startup. Records with parseable timezone-aware ISO 8601 timestamps older than 30 days from the current time are dropped.
 - Outcomes (`analytics/outcomes.jsonl`) are treated in this slice as **operational diagnostics with a 30-day operational horizon**, not as long-term analytics history. This is an explicit data-class decision: if a future feature consumes outcomes for long-term analytics, a separate retention class must be introduced **before** the consuming feature ships. Records dropped by this slice's prune are not recoverable.
-- Pruning is a pure filter: retained record bytes are preserved, with a single `\n` appended to the final retained line if absent (to keep the file JSONL-append-safe for the next `append_*` call). Records are never re-serialized through `json.dumps`.
+- Pruning is a pure filter: retained record bytes are preserved, with a single `\n` appended to the final retained line if absent (to keep the file JSONL-append-safe for the next `append_*` call). Records are never re-serialized through `json.dumps`. File format is LF-only by construction: every `append_*` writer emits `\n`, and pruning writes retained records back into that LF JSONL format. A hypothetical CRLF input file is normalized to LF by the text-mode prune pass; "record bytes preserved" applies to record content, not non-LF line-ending bytes.
 - Records with missing, non-string, unparseable, or timezone-naive `timestamp` fields are retained (retain-on-uncertainty principle — ambiguous records are not silently erased). These records are **TTL-exempt by design**: the 30-day TTL applies only to records with parseable, timezone-aware timestamps, so a sufficiently corrupt audit or outcome line can survive past the 30-day window indefinitely. `PruneSummary.audit_retained_malformed` and `PruneSummary.outcomes_retained_malformed` count these records each pass; they share the observability conditional described in the bootstrap bullet below.
 - Records that fail to parse as JSON, or parse as non-dict shapes, are retained as raw lines.
 - Blank lines are removed during pruning (not records; not subject to retain-on-uncertainty).
@@ -320,6 +320,8 @@ This per-file-not-pair-wise transaction boundary is named in §2 Contract; the *
 
 **Invalid UTF-8 is file-level corruption.** The `with path.open(encoding="utf-8") as handle:` block uses Python's default `errors="strict"`. An invalid UTF-8 byte sequence raises `UnicodeDecodeError` during the linear scan, aborting that file's prune pass. This is the intended behavior: the file format is UTF-8 by construction (every `append_*` writer uses `encoding="utf-8"`), so an invalid byte sequence indicates corruption at a granularity below the JSONL-record boundary. Retain-on-uncertainty does not apply — it is a record-level discipline, not a byte-level one. The exception propagates to the orchestrator (and from there to bootstrap), where it is caught alongside `OSError` (§6.1) and surfaced as a `WARNING`. The other file is unaffected if the audit pass succeeded before the outcomes pass raised. `json.JSONDecodeError` is **not** in this fatal-pass class because malformed-JSON records are line-local retained data (per the §5.3 retain-on-uncertainty table).
 
+**Line endings are LF-only by construction (§2 Contract).** The same default text-mode `open(...)` does universal-newlines translation: CRLF input is normalized to LF in the Python string `raw_line` on read, and `tmp_path.open("w", encoding="utf-8")` writes `\n` literally on POSIX. The journal's own writers only emit LF, so a CRLF input file is a hypothetical hand-edited scenario — and the prune pass normalizes it back to the documented LF JSONL format. No CRLF preservation; the format-boundary pin in §8.3 prevents future regressions.
+
 ### 5.2a Population helpers
 
 The `populate` callback used by `_prune_jsonl_pass` (and the equivalent reader path in `_ensure_audit_seen_loaded` / `_ensure_outcomes_seen_loaded`) is one of two module-level free functions:
@@ -542,8 +544,11 @@ def main() -> None:
     try:
         summary = journal.prune_audit_logs()
     except (OSError, UnicodeDecodeError):
+        # Accurate across full failure (both files untouched) and partial
+        # failure (one file rewritten, the other failed mid-pass). The
+        # exception traceback in exc_info disambiguates which file raised.
         logger.warning(
-            "audit prune failed; continuing without startup retention cleanup",
+            "startup retention cleanup failed or incomplete; continuing",
             exc_info=True,
         )
     else:
@@ -651,6 +656,7 @@ Replace the existing three bullets with:
 > - **Cleanup:** Pruned at plugin startup. Pruning is a pure filter — retained record bytes are preserved (with a single `\n` appended to the final retained line if absent, to keep the file JSONL-append-safe). Records are never re-serialized through `json.dumps`.
 > - **Timestamp parsing:** Pruning compares timezone-aware ISO 8601 timestamps. Records with missing, non-string, unparseable, or timezone-naive `timestamp` fields are retained (retain-on-uncertainty: ambiguous records are never silently erased). These malformed-timestamp records are **TTL-exempt by design** — the 30-day TTL applies only to records with parseable, timezone-aware timestamps; sufficiently corrupt records can survive past the 30-day window indefinitely.
 > - **Per-file atomicity:** Pruning is atomic per file (`events.jsonl` and `outcomes.jsonl` are independent retention surfaces), not pair-wise. A failure of one file's prune after the other has already been rewritten leaves a mixed-prune state; the next startup re-runs both files.
+> - **Encoding and line endings:** Files are UTF-8 with LF-only line endings by construction — every appender uses Python's text-mode UTF-8 write and emits `\n`; pruning rewrites retained records in the same format. An invalid UTF-8 byte sequence in either file is treated as **file-level corruption**: the affected file's prune pass aborts. Bootstrap catches the resulting `UnicodeDecodeError` alongside `OSError`, logs at `WARNING`, and continues startup; the other file is unaffected if its pass had already succeeded. JSONL-record-level malformed-JSON is *not* in this fatal class — see Timestamp parsing for the record-level retain-on-uncertainty rule.
 > - **Ownership model:** Exactly one MCP process owns a given `${CLAUDE_PLUGIN_DATA}` directory at a time. Concurrent prune from two processes against the same data directory is undefined and unsupported (matches the existing operation-journal ownership model).
 > - **Blank lines** are not audit/outcome records and may be removed during pruning.
 >
@@ -693,6 +699,7 @@ All journal-internal tests in `tests/test_journal.py`. **Bootstrap-integration t
 ### 8.3 Raw-line retention invariant
 - `test_prune_audit_logs_preserves_record_bytes_for_retained_records` — write a record with unsorted keys / extra whitespace; after prune, retained record bytes are identical to input (`json.dumps` is not invoked on retained records).
 - `test_prune_audit_logs_appends_trailing_newline_to_missing_eof_newline` — write a file whose final retained record lacks a trailing newline; assert the rewritten file ends with `\n` so the next `append_*` call produces a valid JSONL record boundary. Pins F2 (round-4): the contract is "record bytes preserved + final-newline normalization for append safety," not strict byte-for-byte.
+- `test_prune_audit_logs_pins_lf_only_file_format` — write a small file with `\r\n` line endings; assert the rewritten file uses `\n` exclusively (no `\r` bytes remain). Pins F2 (round-5): this is a **format-boundary pin** (§2 Contract: file format is LF-only by construction), not a runtime-scenario regression — the journal's own writers never produce CRLF. The test prevents a future implementer from switching to `newline=""` (which would preserve CRLF) without realizing they've changed the documented file-format stance.
 
 ### 8.4 Atomic replacement
 - `test_prune_audit_logs_preserves_original_on_pre_replace_failure` — patch `os.fsync` (or the temp-file open) to raise; assert original file unchanged.
