@@ -243,9 +243,9 @@ The `| sort` step is critical: `find` traverses inodes in filesystem-defined ord
 
 1. **At extraction:** 146 tracked (4 active + 142 archive). All migrated handoffs entered git history together.
 2. **Post-`3563bb3`:** still 146 tracked. The new `.gitignore` rule did not retroactively untrack existing files; it only blocked new additions.
-3. **Post-active-untrack (this revision):** 142 tracked. The 4 migrated active handoffs were explicitly untracked via `git rm --cached` to honor their working-memory semantics (eligible for `/load`). They remain on disk as local files, indistinguishable from new session handoffs under the `.gitignore` rule.
+3. **Post-active-untrack (this revision):** 142 tracked. The 4 migrated active handoffs were explicitly untracked via `git rm --cached` to honor their working-memory semantics (eligible for `/load`). Their on-disk presence is machine-specific — they survive on the machine where the untrack ran (and the `.gitignore` rule catches them there ongoing); a fresh clone of `HEAD` reproduces only the 142 archived files. Recover from history when needed: `git restore --source=ed98d3b -- docs/handoffs/<name>`.
 
-The 142 figure refers only to the sealed historical corpus and does not float with local session activity. `find docs/handoffs -name '*.md'` may show a higher count due to local-only files (the 4 migrated active handoffs at root + any new session handoffs + post-load archives). See `AGENTS.md` Handoffs section for the operational policy and promotion procedure.
+The 142 figure refers only to the sealed historical corpus and does not float with local session activity. `find docs/handoffs -name '*.md'` may show a higher count due to local-only files (the 4 migrated active handoffs at root when present on this machine + any new session handoffs + post-load archives). See `AGENTS.md` Handoffs section for the operational policy and promotion procedure.
 
 ## File-Level Inventory (DoD §Manifest, path-by-path)
 
@@ -277,9 +277,9 @@ All rows: classification `migrated-historical`. Rationale: codex-collaboration-e
 
 #### File-level inventory: active migrated handoffs (4, now untracked)
 
-All rows: classification `migrated-active-untracked`. Rationale: legitimately active codex-collaboration session handoff, eligible for future `/load`. At extraction these were tracked (incidentally, along with the rest of the corpus); in this revision they were untracked via `git rm --cached` to honor their working-memory semantics. They remain on disk locally; the `.gitignore` rule (`docs/handoffs/`) now applies. If a future session loads one, the `mv` to `archive/` proceeds cleanly with no git regression.
+All rows: classification `migrated-active-untracked`. Rationale: legitimately active codex-collaboration session handoff, eligible for future `/load`. At extraction these were tracked (incidentally, along with the rest of the corpus); in this revision they were untracked via `git rm --cached` to honor their working-memory semantics. Their on-disk presence is machine-specific: they survive on the machine where the untrack ran (the `.gitignore` rule `docs/handoffs/` catches them ongoing there), but a fresh clone of `HEAD` does not include them. Recover from history when needed: `git restore --source=ed98d3b -- docs/handoffs/<name>`. If a session loads one (after restore if needed), the `mv` to `archive/` proceeds cleanly with no git regression.
 
-Old path `docs/handoffs/<name>` (gitignored in monorepo), new path `docs/handoffs/<name>` (on disk in this repo, untracked).
+Old path `docs/handoffs/<name>` (gitignored in monorepo), new path `docs/handoffs/<name>` (untracked in this repo; on disk locally only on the machine where the untrack ran; recoverable elsewhere from `ed98d3b` history).
 
 | File |
 |---|

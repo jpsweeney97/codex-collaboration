@@ -45,8 +45,8 @@ CLAUDE.local.md
 .claude/settings.local.json
 
 # Handoffs (local-only working memory per handoff plugin contract).
-# The 146 migrated handoffs (4 active + 142 archive) remain tracked
-# as a sealed migration corpus — see docs/migration/monorepo-extraction-manifest.md.
+# The sealed migration corpus (142 archived handoffs under docs/handoffs/archive/)
+# remains tracked as historical record — see docs/migration/monorepo-extraction-manifest.md.
 # Session handoffs created after extraction stay local-only.
 # See AGENTS.md Handoffs section for the operational policy + promotion procedure.
 docs/handoffs/
