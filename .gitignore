@@ -35,6 +35,9 @@ analytics/
 .tmp/
 tmp/
 
+# Design review workspace (transient artifacts from /design-review-team)
+.design-review-workspace/
+
 # Local secrets / settings overrides
 .env
 .env.local
