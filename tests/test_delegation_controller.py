@@ -3692,6 +3692,85 @@ def test_recover_startup_leaves_unresolved_when_rollback_fails(
     )
 
 
+def test_recover_startup_suspends_rollback_when_user_edits_present(
+    tmp_path: Path,
+) -> None:
+    """Recovery must not silently discard user edits outside the reviewed set.
+
+    Scenario: a delegation applied changes to README.md, then the plugin
+    crashed between the dispatched journal write and the completed write.
+    Between crash and recovery, the user manually edited NOTES.md (a file
+    Codex never touched). On restart, recover_startup encounters the
+    dispatched entry; the legacy code path would call `git checkout -- .`
+    and discard the user's NOTES.md edit. The fix suspends the rollback
+    and leaves the job at `rollback_needed` for manual resolution.
+    """
+    controller, job_store, journal, primary_repo, job_id, _artifact_hash, _cb = (
+        _build_promote_scenario(tmp_path)
+    )
+
+    session_id = "sess-promote"
+    idempotency_key = f"promotion:{job_id}:1"
+    created_at = journal.timestamp()
+    repo_root_str = str(primary_repo)
+
+    journal.write_phase(
+        OperationJournalEntry(
+            idempotency_key=idempotency_key,
+            operation="promotion",
+            phase="intent",
+            collaboration_id="collab-promote-1",
+            created_at=created_at,
+            repo_root=repo_root_str,
+            job_id=job_id,
+        ),
+        session_id=session_id,
+    )
+    journal.write_phase(
+        OperationJournalEntry(
+            idempotency_key=idempotency_key,
+            operation="promotion",
+            phase="dispatched",
+            collaboration_id="collab-promote-1",
+            created_at=created_at,
+            repo_root=repo_root_str,
+            job_id=job_id,
+        ),
+        session_id=session_id,
+    )
+
+    persisted = job_store.get(job_id)
+    assert persisted is not None
+    diff_path = persisted.artifact_paths[0]
+    subprocess.run(
+        ["git", "-C", str(primary_repo), "apply", "--binary", diff_path],
+        check=True,
+        capture_output=True,
+    )
+
+    # User manually edits a file that is NOT in reviewed_changed_files.
+    # The reviewed set only contains README.md (modified by the delegation).
+    user_edit_path = primary_repo / "NOTES.md"
+    user_edit_content = "# User notes written between crash and recovery\n"
+    user_edit_path.write_text(user_edit_content, encoding="utf-8")
+
+    controller.recover_startup()
+
+    recovered = job_store.get(job_id)
+    assert recovered is not None
+    assert recovered.promotion_state == "rollback_needed", (
+        f"Expected 'rollback_needed' but got {recovered.promotion_state!r}. "
+        "Recovery must suspend automatic rollback when user edits are "
+        "present outside the reviewed change set."
+    )
+
+    # User's manual edit must be untouched.
+    assert user_edit_path.exists(), "User edit must not be deleted by recovery"
+    assert (
+        user_edit_path.read_text(encoding="utf-8") == user_edit_content
+    ), "User edit must not be overwritten by automatic rollback"
+
+
 def test_bootstrap_factory_wires_promotion_callback(tmp_path: Path) -> None:
     """The production bootstrap factory must pass promotion_callback to the controller."""
     from scripts.codex_runtime_bootstrap import _build_delegation_factory

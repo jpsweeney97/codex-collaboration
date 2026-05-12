@@ -2376,6 +2376,54 @@ class DelegationController:
                     return False
         return True
 
+    def _workspace_has_unexpected_edits(
+        self,
+        primary_repo_root: Path,
+        *,
+        reviewed_changed_files: list[str],
+    ) -> bool:
+        """Return True if `git status --porcelain` shows modifications outside
+        the reviewed change set.
+
+        Called from `recover_startup` to suspend automatic promotion rollback
+        when the user has touched files we did not expect. The reviewed set
+        names everything Codex's diff applied; anything else is the user's
+        work and must not be silently discarded by `git checkout -- .`.
+
+        Fails safe: if git cannot report status (subprocess error, timeout),
+        treat the workspace as having unexpected edits so the rollback is
+        suspended and the user resolves manually. The cost of a spurious
+        suspension is small; the cost of silently overwriting user edits is
+        not.
+        """
+        try:
+            porcelain = subprocess.run(
+                ["git", "-C", str(primary_repo_root), "status", "--porcelain"],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            ).stdout.rstrip()
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            return True
+
+        if not porcelain:
+            return False
+        expected = set(reviewed_changed_files)
+        for line in porcelain.splitlines():
+            if len(line) < 4:
+                continue
+            # Porcelain format: XY<space>path. Renames: "XY<space>old -> new".
+            # If either side of a rename is outside the expected set, flag it.
+            path = line[3:]
+            if " -> " in path:
+                old_side, new_side = path.split(" -> ", 1)
+                if old_side not in expected or new_side not in expected:
+                    return True
+            elif path not in expected:
+                return True
+        return False
+
     def discard(self, *, job_id: str) -> DiscardResult | DiscardRejectedResponse:
         """Discard a delegation job without promoting.
 
@@ -3025,59 +3073,84 @@ class DelegationController:
                                 except (ValueError, KeyError, TypeError):
                                     pass
                                 break
-                        verified = self._verify_promotion(
-                            job=job,
-                            primary_repo_root=primary_repo_root,
+                        # Guard automatic rollback against user edits made
+                        # between crash and recovery. `git checkout -- .`
+                        # would silently discard any working-tree edits
+                        # outside the reviewed change set; the user has no
+                        # post-hoc signal that their work was lost. Detect
+                        # the case and leave the job at `rollback_needed`
+                        # for manual resolution instead.
+                        if self._workspace_has_unexpected_edits(
+                            primary_repo_root,
                             reviewed_changed_files=reviewed_changed_files,
-                        )
-                        if verified:
-                            self._job_store.update_promotion_state(
+                        ):
+                            logger.warning(
+                                "Promotion recovery: workspace has edits "
+                                "outside reviewed change set for job %r — "
+                                "automatic verify/rollback suspended, "
+                                "manual resolution required",
                                 entry.job_id,
-                                promotion_state="verified",
                             )
-                        else:
-                            # Mutation happened but verification failed — rollback.
-                            new_paths = {
-                                path
-                                for path in reviewed_changed_files
-                                if not _path_is_tracked(primary_repo_root, path)
-                            }
                             self._job_store.update_promotion_state(
                                 entry.job_id,
                                 promotion_state="rollback_needed",
                             )
-                            try:
-                                subprocess.run(
-                                    [
-                                        "git",
-                                        "-C",
-                                        str(primary_repo_root),
-                                        "checkout",
-                                        "--",
-                                        ".",
-                                    ],
-                                    check=True,
-                                    capture_output=True,
-                                    timeout=10,
-                                )
-                                for relative_path in sorted(new_paths):
-                                    target = primary_repo_root / relative_path
-                                    if target.exists():
-                                        target.unlink()
-                            except subprocess.CalledProcessError:
-                                logger.warning(
-                                    "Promotion recovery: rollback git checkout failed "
-                                    "for job %r — leaving journal unresolved for "
-                                    "next recovery attempt",
-                                    entry.job_id,
-                                )
-                                # Do NOT write rolled_back or close the journal.
-                                # Leave unresolved so next startup re-enters recovery.
-                                continue
-                            self._job_store.update_promotion_state(
-                                entry.job_id,
-                                promotion_state="rolled_back",
+                            # Fall through to advance journal to completed:
+                            # the recovery decision has been made.
+                        else:
+                            verified = self._verify_promotion(
+                                job=job,
+                                primary_repo_root=primary_repo_root,
+                                reviewed_changed_files=reviewed_changed_files,
                             )
+                            if verified:
+                                self._job_store.update_promotion_state(
+                                    entry.job_id,
+                                    promotion_state="verified",
+                                )
+                            else:
+                                # Mutation happened but verification failed — rollback.
+                                new_paths = {
+                                    path
+                                    for path in reviewed_changed_files
+                                    if not _path_is_tracked(primary_repo_root, path)
+                                }
+                                self._job_store.update_promotion_state(
+                                    entry.job_id,
+                                    promotion_state="rollback_needed",
+                                )
+                                try:
+                                    subprocess.run(
+                                        [
+                                            "git",
+                                            "-C",
+                                            str(primary_repo_root),
+                                            "checkout",
+                                            "--",
+                                            ".",
+                                        ],
+                                        check=True,
+                                        capture_output=True,
+                                        timeout=10,
+                                    )
+                                    for relative_path in sorted(new_paths):
+                                        target = primary_repo_root / relative_path
+                                        if target.exists():
+                                            target.unlink()
+                                except subprocess.CalledProcessError:
+                                    logger.warning(
+                                        "Promotion recovery: rollback git checkout failed "
+                                        "for job %r — leaving journal unresolved for "
+                                        "next recovery attempt",
+                                        entry.job_id,
+                                    )
+                                    # Do NOT write rolled_back or close the journal.
+                                    # Leave unresolved so next startup re-enters recovery.
+                                    continue
+                                self._job_store.update_promotion_state(
+                                    entry.job_id,
+                                    promotion_state="rolled_back",
+                                )
 
             # Advance journal to completed.
             self._journal.write_phase(
