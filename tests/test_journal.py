@@ -918,6 +918,68 @@ def test_load_stale_marker_drops_record_with_invalid_fields(tmp_path: Path) -> N
     assert repo_key not in loaded
 
 
+@pytest.mark.parametrize(
+    "bad_record",
+    [
+        # Each field exists with the right key set, but the value is the
+        # wrong runtime type. Dataclass constructor does not enforce types,
+        # so without explicit validation these would pass through as
+        # "live" markers and leak corrupt state into the advisory prompt.
+        pytest.param(
+            {
+                "repo_root": [],
+                "promoted_artifact_hash": "hash-1",
+                "job_id": "job-1",
+                "recorded_at": "2026-03-27T15:00:00Z",
+            },
+            id="repo_root_list",
+        ),
+        pytest.param(
+            {
+                "repo_root": "/repo",
+                "promoted_artifact_hash": [],
+                "job_id": "job-1",
+                "recorded_at": "2026-03-27T15:00:00Z",
+            },
+            id="promoted_artifact_hash_list",
+        ),
+        pytest.param(
+            {
+                "repo_root": "/repo",
+                "promoted_artifact_hash": "hash-1",
+                "job_id": {},
+                "recorded_at": "2026-03-27T15:00:00Z",
+            },
+            id="job_id_dict",
+        ),
+        pytest.param(
+            {
+                "repo_root": "/repo",
+                "promoted_artifact_hash": "hash-1",
+                "job_id": "job-1",
+                "recorded_at": None,
+            },
+            id="recorded_at_null",
+        ),
+    ],
+)
+def test_load_stale_marker_drops_record_with_non_string_field_values(
+    tmp_path: Path, bad_record: dict[str, object]
+) -> None:
+    plugin_data = tmp_path / "plugin-data"
+    plugin_data.mkdir(parents=True, exist_ok=True)
+    journal_dir = plugin_data / "journal"
+    journal_dir.mkdir(parents=True, exist_ok=True)
+    markers_path = journal_dir / "stale_advisory_context.json"
+    repo_key = str(tmp_path.resolve())
+    markers_path.write_text(json.dumps({repo_key: bad_record}), encoding="utf-8")
+
+    journal = OperationJournal(plugin_data)
+    assert journal.load_stale_marker(tmp_path) is None
+    loaded = json.loads(markers_path.read_text(encoding="utf-8"))
+    assert repo_key not in loaded
+
+
 class TestDelegationOutcomeJournal:
     def test_append_delegation_outcome_writes_to_outcomes_jsonl(
         self, tmp_path: Path

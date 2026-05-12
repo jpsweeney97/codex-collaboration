@@ -43,6 +43,14 @@ _VALID_OPERATIONS = frozenset(
     )
 )
 _VALID_PHASES = frozenset(("intent", "dispatched", "completed"))
+# Field names whose values are validated as str before reconstructing a
+# StaleAdvisoryContextMarker. Update if the dataclass gains a non-str field.
+_STALE_MARKER_FIELDS = (
+    "repo_root",
+    "promoted_artifact_hash",
+    "job_id",
+    "recorded_at",
+)
 _JOURNAL_REQUIRED_STR = (
     "idempotency_key",
     "operation",
@@ -214,9 +222,9 @@ class OperationJournal:
         """Return the persisted stale marker for `repo_root`, if present.
 
         Stale-marker state is ephemeral session-scoped data. Any per-record
-        corruption (wrong type, old schema, missing fields, unknown fields)
-        is treated as absent and dropped — the next promotion re-emits any
-        marker that is genuinely needed.
+        corruption (wrong type, old schema, missing fields, unknown fields,
+        non-string field values) is treated as absent and dropped — the
+        next promotion re-emits any marker that is genuinely needed.
         """
 
         markers = self._read_markers()
@@ -231,6 +239,19 @@ class OperationJournal:
         # Old-schema markers have "promoted_head" instead of
         # "promoted_artifact_hash" and lack "job_id".
         if "promoted_artifact_hash" not in record or "job_id" not in record:
+            del markers[key]
+            self._write_markers(markers)
+            return None
+        # StaleAdvisoryContextMarker is a plain dataclass; the constructor
+        # catches missing/extra fields via TypeError but does not enforce
+        # that field values are strings. A record like
+        # {"job_id": {}, "promoted_artifact_hash": [], "recorded_at": null}
+        # would otherwise pass through as a live marker and leak corrupt
+        # state into the advisory stale-context prompt.
+        if not all(
+            isinstance(record.get(field), str)
+            for field in _STALE_MARKER_FIELDS
+        ):
             del markers[key]
             self._write_markers(markers)
             return None
