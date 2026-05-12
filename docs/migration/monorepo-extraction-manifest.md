@@ -509,24 +509,25 @@ rg -l "codex-collaboration|codex_collaboration|packages/plugins/codex-collaborat
    -t cfg -t py -t sh
 ```
 
-Returns **143 files** at the current post-cleanup state (re-verified at manifest-revision time). The count is sensitive (±2) to the exact type filter:
+Returns **136 files** at chore-branch tip `25a5afaf` (re-verified at manifest-revision time). The count is sensitive (±2) to the exact type filter:
 
-- `rg -l "<pattern>"` with no type filter: 144
-- The scoped form above: 143
-- `rg -l "<pattern>" -tmd -tpy -ttoml -tyaml -tjson -tsh`: 143
+- `rg -l "<pattern>"` with no type filter: 137
+- The scoped form above: 136
+- `rg -l "<pattern>" -tmd -tpy -ttoml -tyaml -tjson -tsh`: 136
 
-The 2-file drift between the original 143 reading (commit `e71db48`) and a separate reviewer's 145 reading is within this filter-sensitivity tolerance and does not affect the substantive claim that no file in the monorepo claims current authority over codex-collaboration. The standard is zero stale live authority, not a single canonical count.
+Counts at the prior cleanup commit `701952b8` (before the diagnostics MIGRATED.md follow-up `25a5afaf` landed on the chore branch): 144 unscoped, 143 scoped (both filter variants). The −7 delta on the scoped form reflects the net effect of `25a5afaf`: 10 codex-collaboration diagnostic file deletions plus 1 new `docs/diagnostics/MIGRATED.md`, with the difference between net file count (−9) and grep delta (−7) explained by `.json` files in the deletion set whose content uses `codex-app-server` paths exclusively rather than the regex's `codex-collaboration`/`codex_collaboration`/`packages/plugins/codex-collaboration` patterns.
 
-Classification (counts approximate, based on current grep):
+The 2-file drift between the original 143 reading (commit `e71db48`) and a separate reviewer's 145 reading at the post-`701952b8` state is within this filter-sensitivity tolerance and does not affect the substantive claim that no file in the monorepo claims current authority over codex-collaboration. The standard is zero stale live authority, not a single canonical count.
+
+Classification (counts approximate, based on grep against monorepo `chore/extract-codex-collaboration` tip `25a5afaf`):
 
 | Class | Count | Notes |
 |---|---|---|
-| Migration redirects (stubs I authored) | 22 | The MIGRATED.md stubs, single-file redirects, and updated discovery surfaces — these explicitly point at the new repo |
+| Migration redirects (stubs created during extraction + diagnostics follow-up) | 23 | MIGRATED.md stubs at three directory-level paths (`packages/plugins/codex-collaboration/`, `docs/superpowers/specs/codex-collaboration/`, `docs/diagnostics/` — the third added in commit `25a5afaf`), single-file redirects, and updated discovery surfaces — these explicitly point at the new repo |
 | Historical reviews / design docs | ~12 | `docs/reviews/2026-*`, design docs `docs/superpowers/specs/2026-03-*` and `2026-04-*-*-design.md` — snapshot-true, never claimed current authority |
 | Historical plans (snapshot evidence) | ~50 | `docs/plans/2026-03-*` through `2026-04-24-packet-1-*` and earlier; `docs/superpowers/plans/2026-02-*` through `2026-04-20-*` — completed snapshots; memory + closed tickets carry the outcomes |
 | Closed tickets (project history) | 17 | `docs/tickets/closed-tickets/2026-*codex-collaboration*` and related — closed work record; the new repo has its own copy as `migrated-historical`, the monorepo retains them as snapshot ancestry |
 | Benchmark transcripts | ~15 | `docs/benchmarks/dialogue-supersession/v1/*` — frozen benchmark artifacts that reference codex-collaboration paths as they were at run time |
-| Diagnostics | ~7 | `docs/diagnostics/*codex-app-server*` — frozen diagnostic data |
 | Active runtime contract references | 3 | `extensions/skills/next-steps/SKILL.md`, `extensions/skills/making-recommendations/SKILL.md`, `extensions/skills/making-recommendations/references/codex-delta.md` — reference the plugin's runtime tool names (`mcp__plugin_codex-collaboration_codex-collaboration__codex.consult`, etc.). The runtime contract is unchanged by the source migration; the plugin is still installed under the same name, so these references work without modification |
 | Historical handoffs (gitignored in monorepo) | many | Local-only session-state files |
 | **Disallowed live authority** | **0** | — |
