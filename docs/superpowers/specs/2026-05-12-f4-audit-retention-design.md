@@ -32,7 +32,7 @@ After this slice lands, the following hold:
 - Atomic file replacement guarantees: target file untouched on pre-replace failure; POSIX-atomic swap on `os.replace` success. Does *not* directory-fsync — post-rename durability across power-fail is not asserted, matching the existing `compact()` and `_write_markers` pattern.
 - **Atomicity is per file, not pair-wise.** A successful prune of `events.jsonl` followed by a failed prune of `outcomes.jsonl` leaves the canonical files in a mixed-prune state. Both files are independent retention surfaces; the next startup re-runs the full prune. Append correctness is preserved across the mixed state because `_ensure_seen_sets_loaded()` reads disk as the source of truth when the in-memory atomic swap is skipped.
 - **Single-writer assumption.** Exactly one MCP process owns a given `plugin_data_path` at a time. Concurrent prune from two processes against the same data directory is undefined and unsupported — the fixed-suffix temp file `<path>.tmp` would collide. This matches the existing `compact()` and `_write_markers` patterns in `OperationJournal`.
-- The plugin bootstrap invokes pruning. Prune failure (`OSError`) invokes `logger.warning(..., exc_info=True)` and does not block startup. **Until F18 lands `logging.basicConfig`, that warning is discarded by Python's default logging configuration; operator visibility requires F18 (or `caplog` in tests).** Append correctness is preserved through `_ensure_seen_sets_loaded()` regardless of logging state.
+- The plugin bootstrap invokes pruning. Prune failure (`OSError`) invokes `logger.warning(..., exc_info=True)` and does not block startup. **Warning-level output reaches stderr via Python's `logging.lastResort` handler (the unconfigured-logger fallback), so the failure signal is observable to whoever sees the MCP server's stderr unless the host suppresses it.** The success-summary call (`logger.info(...)` in §6.1) is below the lastResort threshold and is discarded by Python's default logging configuration; operator visibility into success metrics requires F18 (or `caplog` in tests). Append correctness is preserved through `_ensure_seen_sets_loaded()` regardless of logging state.
 
 ## 3. Scope
 
@@ -257,6 +257,12 @@ def prune_audit_logs(self, now: datetime | None = None) -> PruneSummary:
     )
     cutoff = now - timedelta(days=_AUDIT_TTL_DAYS)
 
+    # Invalidate seen-set initialization before any disk mutation. If any
+    # prune pass raises after we've started rewriting files, the flag stays
+    # False and the next append_*_once triggers a fresh read from disk —
+    # load-bearing for re-runnable prune on an already-initialized journal.
+    self._seen_sets_initialized = False
+
     new_audit_seen: set[_AuditDedupKey] = set()
     new_dialogue_outcomes_seen: set[_DialogueOutcomeDedupKey] = set()
     new_delegation_outcomes_seen: set[_DelegationOutcomeDedupKey] = set()
@@ -290,7 +296,7 @@ def prune_audit_logs(self, now: datetime | None = None) -> PruneSummary:
     )
 ```
 
-If `_prune_jsonl_pass` for `outcomes.jsonl` raises after `events.jsonl` has been successfully replaced, the journal's in-memory seen-sets are *not* reassigned (the `self._audit_seen = new_audit_seen` lines are unreached). On disk, `events.jsonl` reflects the prune; `outcomes.jsonl` is untouched. The next `append_*_once` consults `_ensure_seen_sets_loaded()`, which reads disk as the source of truth and populates from the mixed state correctly. The next prune cycle re-runs both files. This per-file-not-pair-wise transaction boundary is named in §2 Contract.
+If `_prune_jsonl_pass` for `outcomes.jsonl` raises after `events.jsonl` has been successfully replaced, the journal's in-memory seen-sets are *not* reassigned (the `self._audit_seen = new_audit_seen` lines are unreached) **and** the `_seen_sets_initialized` flag — cleared at prune entry — is not restored to `True`. On disk, `events.jsonl` reflects the prune; `outcomes.jsonl` is untouched. The next `append_*_once` consults `_ensure_seen_sets_loaded()`, which (because the flag is now `False`) reads disk as the source of truth and populates from the mixed state correctly. The next prune cycle re-runs both files. This per-file-not-pair-wise transaction boundary is named in §2 Contract; the flag-clear-at-entry discipline is what keeps the boundary correct when prune is re-run on a journal whose seen-sets were previously initialized — without it, stale in-memory keys could silently skip valid appends.
 
 ### 5.2a Population helpers
 
@@ -394,9 +400,11 @@ This guarantee does **not** include directory-fsync after `os.replace`. Post-ren
 
 ### 5.6 Atomic seen-set rebuild
 
-Both `prune_audit_logs` and `_ensure_seen_sets_loaded` follow the rebuild-and-swap pattern: local sets are constructed during the pass, and `self._audit_seen` / `self._dialogue_outcomes_seen` / `self._delegation_outcomes_seen` are reassigned only after the full pass succeeds. If any sub-step raises, the journal's seen-set state remains exactly as it was before the call.
+Both `prune_audit_logs` and `_ensure_seen_sets_loaded` follow the rebuild-and-swap pattern: local sets are constructed during the pass, and `self._audit_seen` / `self._dialogue_outcomes_seen` / `self._delegation_outcomes_seen` are reassigned only after the full pass succeeds.
 
-`_seen_sets_initialized` is set to `True` only after the atomic reassignment. A failed prune or failed load leaves the flag `False`, so the next `append_*_once` will retry loading via `_ensure_seen_sets_loaded()`.
+`prune_audit_logs` clears `_seen_sets_initialized` to `False` as the first step of the call (before any disk mutation), and sets it back to `True` only after the atomic reassignment block. If any sub-step raises, the in-memory sets retain whatever values they held — but because the flag is now `False`, the next `append_*_once` triggers `_ensure_seen_sets_loaded()`, which reads disk as the source of truth and rebuilds. **This invalidate-before-disk-mutation discipline is load-bearing for re-runnable pruning:** without it, a partial cross-file prune on an already-initialized journal would leave the in-memory sets out of sync with disk, causing later appends to silently skip records that no longer exist on disk.
+
+`_ensure_seen_sets_loaded` is no-op when `_seen_sets_initialized` is `True`. If it raises mid-load, the flag stays `False` and the next `append_*_once` retries.
 
 ### 5.7 `_ensure_seen_sets_loaded` semantics
 
@@ -490,7 +498,7 @@ def main() -> None:
 
 No concrete `now` argument is passed — production consumes `journal._clock()` via `_now()`. The catch is narrowed to `OSError`; parse-side or implementation-bug exceptions are not swallowed and would surface as bootstrap failures.
 
-Until F18 lands a `logging.basicConfig` call, the `logger.info` and `logger.warning` outputs are discarded by Python's default logging configuration. The call-site behavior is still testable via `caplog` or a monkeypatched logger.
+Without `logging.basicConfig` (which F18 will provide), Python's logging defaults dispatch `logger.warning(...)` through `logging.lastResort` to stderr — so the prune-failure signal is observable to whatever process sees the MCP server's stderr (typically Claude Code), even before F18. `logger.info(...)` is below the lastResort threshold and is discarded; operator visibility into the success-summary `info` call requires F18 or `caplog`. Both calls are testable via `caplog` or a monkeypatched logger.
 
 ### 6.2 Factory-deferred reality
 
@@ -547,12 +555,14 @@ The "Write discipline" row is unchanged ("Best-effort append").
 
 Replace the existing three bullets with:
 
-> Operational retention for audit and outcome JSONL records uses the same 30-day TTL.
+> Operational retention for audit and outcome JSONL records uses the same 30-day TTL. Outcomes are treated as **operational diagnostics with a 30-day operational horizon**, not long-term analytics history; if a future feature consumes outcomes for long-term analytics, a separate retention class must be introduced before the consuming feature ships.
 >
 > - **Default TTL:** 30 days from event timestamp.
 > - **Storage:** `${CLAUDE_PLUGIN_DATA}/audit/events.jsonl` (audit events) and `${CLAUDE_PLUGIN_DATA}/analytics/outcomes.jsonl` (dialogue and delegation outcomes).
 > - **Cleanup:** Pruned at plugin startup. Pruning is a pure filter — retained records are written back as their original raw lines, never re-serialized.
-> - **Timestamp parsing:** Pruning compares timezone-aware ISO 8601 timestamps. Records with missing, non-string, unparseable, or timezone-naive `timestamp` fields are retained (retain-on-uncertainty: ambiguous records are never silently erased).
+> - **Timestamp parsing:** Pruning compares timezone-aware ISO 8601 timestamps. Records with missing, non-string, unparseable, or timezone-naive `timestamp` fields are retained (retain-on-uncertainty: ambiguous records are never silently erased). These malformed-timestamp records are **TTL-exempt by design** — the 30-day TTL applies only to records with parseable, timezone-aware timestamps; sufficiently corrupt records can survive past the 30-day window indefinitely.
+> - **Per-file atomicity:** Pruning is atomic per file (`events.jsonl` and `outcomes.jsonl` are independent retention surfaces), not pair-wise. A failure of one file's prune after the other has already been rewritten leaves a mixed-prune state; the next startup re-runs both files.
+> - **Ownership model:** Exactly one MCP process owns a given `${CLAUDE_PLUGIN_DATA}` directory at a time. Concurrent prune from two processes against the same data directory is undefined and unsupported (matches the existing operation-journal ownership model).
 > - **Blank lines** are not audit/outcome records and may be removed during pruning.
 >
 > *Future scope:* periodic-during-session pruning is not implemented in v1. The startup cadence is sufficient for the supported session lifecycle (hours-scale, not multi-day). If future deployments hold the MCP process alive long enough for same-session expiry to matter, a periodic trigger can be added without changing the TTL contract.
@@ -605,6 +615,7 @@ All tests in `tests/test_journal.py`.
 
 ### 8.6 Re-runnable prune (atomic rebuild)
 - `test_prune_audit_logs_evicts_newly_expired_keys_on_second_run` — record A at T0 retained; advance clock past TTL; prune again; A is dropped AND removed from `_audit_seen`.
+- `test_prune_audit_logs_invalidates_seen_set_flag_on_partial_failure` — initialize seen-sets via a successful first prune; patch outcomes pass to raise OSError mid-pass; second prune raises but `_seen_sets_initialized` becomes False; next `append_*_once` triggers reload via `_ensure_seen_sets_loaded()` and dedup reflects post-events-pruned disk state. Pins F1 (new-review): without the flag-clear-at-entry, stale in-memory keys would silently skip valid appends.
 
 ### 8.7 Dedup-set construction
 - `test_append_dialogue_audit_event_once_loads_seen_set_on_first_call` (no prune)
