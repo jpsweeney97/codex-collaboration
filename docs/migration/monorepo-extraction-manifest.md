@@ -252,18 +252,20 @@ The `| sort` step is critical: `find` traverses inodes in filesystem-defined ord
 
 | Tree | Files | SHA-256 (sorted-line aggregate) |
 |---|---|---|
-| `server/*.py` | 31 | `3e9c492ca8cd869805173cef7af6852f7b0fbe476c29f1975a6b5953b8a58309` |
-| `tests/**.py` (excluding `__pycache__`) | 67 | `68e35e0bfab2242c17265a6ef3ce54999b98dbdd4873bf8531175a698a173a3f` |
+| `server/*.py` | 31 | `86c9aa521437484553d2eca0d5ee84b675652380477265904bb44b2df1aa49c6` |
+| `tests/**.py` (excluding `__pycache__`) | 68 | `97409b019a2279251df4e6b036248f829ea3a1a6601a6d63818658fbadd177ff` |
 | `tests/fixtures/**` | 197 | `fe80d8ae2aa3183adcaf1eacdbc3ecf254d2f0ca1f07f199c4fa92dfd6a56153` |
-| `skills/**` (excluding bytecode caches) | 9 (8 `SKILL.md` + 1 `codex-analytics/scripts/analytics.py`) | `0da785c2f52796e8cec27e0f80524881c2a210f5f1cdad6f3b0bf8a1a43440ab` |
-| `docs/specs/**` | 18 (12 top-level + 5 design-docs + 1 evidence JSON) | `035c777d5e4270585a61c55b6597dab506ec5e7b949ed8c235791c9e1d771b28` |
+| `skills/**` (excluding bytecode caches) | 9 (8 `SKILL.md` + 1 `codex-analytics/scripts/analytics.py`) | `91917e2bc3c118d70b5e1dfab21db18b0e54e4c56929d70d0e19e1ba27c5ce3c` |
+| `docs/specs/**` | 18 (12 top-level + 5 design-docs + 1 evidence JSON) | `a0ab4f8bee0f1994278e9f8e336d2ca5cced6c76527f3e1e12ccff135506880f` |
 | `docs/diagnostics/**` | 10 (6 .md + 4 .json) | `0275cf81fdf918e20ac2d9c37b6214ccbed85c056d0d9ca4cb1ece7ecac8b35f` |
 | `docs/handoffs/**.md` (sealed tracked corpus per `git ls-files`, post-active-untrack) | 142 (archived migration handoffs only; 4 active migrated handoffs explicitly untracked in commit `c0d237c`) | (see file-level inventory below) |
 | `docs/tickets/**.md` | 19 (2 active + 17 closed) | (see file-level inventory below) |
 
 **Note on prior checksums (commit `e71db48`):** The initial manifest used `find ... -exec shasum +` without sorting, which made the aggregate non-deterministic. Three of the five prior checksums (`tests/fixtures`, `skills`, `docs/specs`) did not reproduce when independently recomputed. The hashes above are recomputed with the deterministic method and after the post-initial-commit cleanup (commits `cfcb642`, `e71db48`, and the DoD-followup commit landing this manifest revision).
 
-**Note on `tests/**.py` checksum correction (post-cleanup-branch review):** The `tests/**.py` row previously recorded `abd15ddb9f440678fdffcd432c93ae14bd246a935847492eb79d7b11536fecc3`. Adversarial review of the cleanup branch re-ran the documented method against `HEAD = 7194ffe` (67 files, command: `find tests -type f -name '*.py' -exec shasum -a 256 {} + | sort | shasum -a 256`) and obtained `4645b4fa52df1649828d4c596beb67b624a2e75fd21b323610b855dbdb1af332`. The earlier value did not reproduce under any tested interpretation of "tests/**.py" (with or without the `-name '*.py'` filter, with or without `__pycache__` exclusion). Root cause undetermined — most likely state-divergence at the time of the original computation. The table above shows the current recomputed-and-verified value, refreshed on 2026-05-12 after adding hook-runtime regression coverage.
+**Note on `tests/**.py` checksum correction (post-cleanup-branch review):** The `tests/**.py` row previously recorded `abd15ddb9f440678fdffcd432c93ae14bd246a935847492eb79d7b11536fecc3`. Adversarial review of the cleanup branch re-ran the documented method against `HEAD = 7194ffe` (67 files, command: `find tests -type f -name '*.py' -exec shasum -a 256 {} + | sort | shasum -a 256`) and obtained `4645b4fa52df1649828d4c596beb67b624a2e75fd21b323610b855dbdb1af332`. The earlier value did not reproduce under any tested interpretation of "tests/**.py" (with or without the `-name '*.py'` filter, with or without `__pycache__` exclusion). Root cause undetermined — most likely state-divergence at the time of the original computation.
+
+**Note on post-F4 metadata refresh (2026-05-13):** After the CI identity fix and F4 audit-retention work landed on `main` at `30396f9`, the table above was refreshed for the changed aggregate rows (`server/*.py`, `tests/**.py`, `skills/**`, and `docs/specs/**`) using the deterministic method documented here. The `tests/**.py` row now contains 68 files after adding the F4 analytics regression test.
 
 **Note on handoff count (post-`3563bb3`, post-active-untrack in commit `c0d237c`):** The `docs/handoffs/**.md` row reports the **tracked sealed corpus** of 142 archived handoffs as enumerated by `git ls-files docs/handoffs/`. Three temporal frames apply:
 
