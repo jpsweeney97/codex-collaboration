@@ -1,5 +1,7 @@
 """Shared fixtures for codex-collaboration tests."""
 
+import os
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -9,6 +11,38 @@ from server.codex_compat import TESTED_CODEX_VERSION
 FIXTURES_DIR = (
     Path(__file__).parent / "fixtures" / "codex-app-server" / TESTED_CODEX_VERSION
 )
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _git_identity_for_subprocess_commits() -> Iterator[None]:
+    """Ensure subprocess git commits have an author identity.
+
+    Tests that create temporary git repos and clone them rely on ``git commit``
+    succeeding in the clone. The clone inherits no per-path identity, and
+    strict git builds (Linux CI runners) refuse to fall back to
+    ``username@hostname``, exiting 128. macOS git auto-derives identity from
+    ``getpwuid()``, which masks this divergence during local development.
+
+    Setting GIT_AUTHOR_* and GIT_COMMITTER_* env vars makes the suite
+    hermetic across hosts: these are git's highest-priority identity source
+    and are inherited by every ``subprocess.run(["git", ...])`` call.
+    """
+    keys = {
+        "GIT_AUTHOR_NAME": "codex-collaboration-tests",
+        "GIT_AUTHOR_EMAIL": "tests@codex-collaboration.invalid",
+        "GIT_COMMITTER_NAME": "codex-collaboration-tests",
+        "GIT_COMMITTER_EMAIL": "tests@codex-collaboration.invalid",
+    }
+    previous = {k: os.environ.get(k) for k in keys}
+    os.environ.update(keys)
+    try:
+        yield
+    finally:
+        for k, v in previous.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
 
 
 @pytest.fixture
