@@ -527,27 +527,48 @@ class TestAuditRetentionPruning:
     def test_prune_audit_logs_normalizes_non_utc_aware_timestamps(
         self, tmp_path: Path
     ) -> None:
-        """Record timestamp uses a non-UTC offset (+09:00). Cutoff is in UTC.
-        The strict parser normalizes to UTC before comparison - record dated
-        slightly before cutoff in UTC must still be retained when its local
-        offset places it inside the 30-day window.
+        """Two records flip classification under naive-lexical / strip-tz
+        comparison vs correct UTC normalization. Pins design Section 5.4
+        parser semantics: the strict comparison must happen in UTC.
+
+        Cutoff is 2026-04-12T00:00:00Z (now - 30 days).
+
+        Record A: local "2026-04-11T20:00:00-05:00" == UTC 2026-04-12T01:00:00Z
+          - Correct (UTC compare):     01:00 > cutoff -> RETAIN.
+          - Buggy (strip-tz or lex):   "2026-04-11..." < "2026-04-12..." -> DROP.
+
+        Record B: local "2026-04-12T08:59:59+09:00" == UTC 2026-04-11T23:59:59Z
+          - Correct (UTC compare):     04-11 < cutoff -> DROP.
+          - Buggy (strip-tz or lex):   "2026-04-12T08..." > "2026-04-12T00..." -> RETAIN.
+
+        A correct implementation produces {retained=1, dropped=1, kept=A}.
+        Any buggy implementation produces {retained=1, dropped=1, kept=B},
+        which the assertion catches.
         """
         now = datetime(2026, 5, 12, tzinfo=UTC)
         journal = OperationJournal(tmp_path / "plugin-data", clock=_fixed_clock(now))
         audit_path = tmp_path / "plugin-data" / "audit" / "events.jsonl"
-        # 2026-04-13T08:00:00+09:00 == 2026-04-12T23:00:00Z (within 30-day window
-        # from 2026-05-12T00:00:00Z). A naive lexical-only comparison against
-        # "2026-04-12T00:00:00Z" cutoff would mis-classify this.
         journal.append_audit_event(
-            _audit_event(event_id="jp-tz", timestamp="2026-04-13T08:00:00+09:00")
+            _audit_event(
+                event_id="us-cdt-retain",
+                timestamp="2026-04-11T20:00:00-05:00",
+                turn_id="turn-A",
+            )
+        )
+        journal.append_audit_event(
+            _audit_event(
+                event_id="jp-drop",
+                timestamp="2026-04-12T08:59:59+09:00",
+                turn_id="turn-B",
+            )
         )
 
         summary = journal.prune_audit_logs()
 
         records = _read_jsonl(audit_path)
-        assert [record["event_id"] for record in records] == ["jp-tz"]
+        assert [record["event_id"] for record in records] == ["us-cdt-retain"]
         assert summary.audit_retained == 1
-        assert summary.audit_dropped == 0
+        assert summary.audit_dropped == 1
 ```
 
 Add `PruneSummary` to the existing `from server.journal import ...` import.
@@ -1230,22 +1251,25 @@ def test_ensure_audit_seen_loaded_tolerates_corrupt_jsonl_line(
     journal = OperationJournal(tmp_path / "plugin-data")
     audit_path = tmp_path / "plugin-data" / "audit" / "events.jsonl"
     audit_path.parent.mkdir(parents=True)
-    audit_path.write_text(
+    initial_content = (
         '{not-valid-json\n'
         '{"event_id":"valid","timestamp":"2026-05-01T00:00:00Z",'
         '"actor":"claude","action":"dialogue_turn",'
         '"collaboration_id":"collab-1","runtime_id":"rt-1",'
-        '"turn_id":"turn-1"}\n',
-        encoding="utf-8",
+        '"turn_id":"turn-1"}\n'
     )
+    audit_path.write_text(initial_content, encoding="utf-8")
 
     journal.append_dialogue_audit_event_once(
         _audit_event(event_id="duplicate")  # same dedup key as the valid line
     )
 
-    # The corrupt line was skipped; the valid line populated the seen-set;
-    # the new event was deduped against it (file holds only the original).
-    assert [record["event_id"] for record in _read_jsonl(audit_path)] == ["valid"]
+    # The corrupt line was skipped during populate; the valid line populated
+    # the seen-set; the new event was deduped (file content unchanged - no
+    # new line appended). Cannot use `_read_jsonl` here because it is strict
+    # and the malformed line on disk would raise JSONDecodeError; instead
+    # assert the raw file is byte-equal to the input.
+    assert audit_path.read_text(encoding="utf-8") == initial_content
     assert journal._audit_seen_initialized is True
 
 
@@ -1256,18 +1280,20 @@ def test_ensure_outcomes_seen_loaded_tolerates_corrupt_jsonl_line(
     journal = OperationJournal(tmp_path / "plugin-data")
     outcomes_path = tmp_path / "plugin-data" / "analytics" / "outcomes.jsonl"
     outcomes_path.parent.mkdir(parents=True)
-    outcomes_path.write_text(
+    initial_content = (
         '{not-valid-json\n'
         '{"outcome_id":"valid","timestamp":"2026-05-01T00:00:00Z",'
         '"outcome_type":"dialogue_turn","collaboration_id":"collab-1",'
         '"runtime_id":"rt-1","context_size":1024,"turn_id":"turn-1",'
-        '"turn_sequence":1}\n',
-        encoding="utf-8",
+        '"turn_sequence":1}\n'
     )
+    outcomes_path.write_text(initial_content, encoding="utf-8")
 
     journal.append_dialogue_outcome_once(_dialogue_outcome(outcome_id="duplicate"))
 
-    assert [record["outcome_id"] for record in _read_jsonl(outcomes_path)] == ["valid"]
+    # `_read_jsonl` is strict; assert raw file content instead so the
+    # corrupt line does not raise during the assertion.
+    assert outcomes_path.read_text(encoding="utf-8") == initial_content
     assert journal._outcomes_seen_initialized is True
 
 
@@ -2222,7 +2248,7 @@ def test_data_header_reports_observed_timestamp_ranges(self, tmp_path: Path) -> 
     assert "Audit observed timestamp range:" in output
 ```
 
-Add a test that pins the round-1 F2 parseable-only filter - malformed string timestamps must NOT define the range endpoints, and the count of skipped records must surface separately:
+Add a test that pins the round-1 F2 parseable-only filter - malformed string timestamps must NOT define the range endpoints, and the count of skipped records must surface separately. This test bypasses `_run_analytics()` because that helper calls `_write_fixtures()` against `tmp_path / "data"` and would overwrite anything written elsewhere; instead invoke the analytics script directly with custom fixture paths so the malformed records are actually read:
 
 ```python
 def test_data_header_excludes_malformed_timestamps_from_range(
@@ -2231,9 +2257,13 @@ def test_data_header_excludes_malformed_timestamps_from_range(
     """Round-1 F2 amendment. Records with non-string, unparseable, or
     timezone-naive `timestamp` fields must NOT participate in the range
     computation; they appear instead in a per-file missing/malformed count.
+
+    Bypasses `_run_analytics()` (which rebuilds fixtures under
+    `tmp_path/"data"`) and invokes the script directly with flat paths so
+    the malformed-timestamp fixture is the actual input to the script.
     """
-    outcomes_path = tmp_path / "analytics" / "outcomes.jsonl"
-    outcomes_path.parent.mkdir(parents=True, exist_ok=True)
+    outcomes_path = tmp_path / "outcomes.jsonl"
+    audit_path = tmp_path / "events.jsonl"
     outcomes_path.write_text(
         '{"outcome_id":"valid","timestamp":"2026-04-01T00:00:00Z",'
         '"outcome_type":"dialogue_turn","collaboration_id":"c",'
@@ -2249,8 +2279,16 @@ def test_data_header_excludes_malformed_timestamps_from_range(
         '"turn_sequence":3}\n',
         encoding="utf-8",
     )
+    audit_path.write_text("", encoding="utf-8")
 
-    output = _run_analytics(tmp_path)
+    result = subprocess.run(
+        ["python3", str(ANALYTICS_SCRIPT), str(outcomes_path), str(audit_path)],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, f"Script failed:\n{result.stderr}"
+    output = result.stdout
 
     # The well-formed timestamp is the only parseable one - appears as both
     # endpoints of the displayed range.
