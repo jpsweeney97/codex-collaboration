@@ -154,10 +154,10 @@ def prune_audit_logs(self) -> PruneSummary:
     file atomically with retained records as their original raw lines;
     populate this journal's dedup seen-sets from retained records.
 
-    `now` is normally None — production callers consume the injected clock.
-    Tests may pass an explicit timezone-aware `now`; naive values raise
-    `ValueError`. Idempotent: re-running rebuilds the sets from scratch,
-    so newly-expired keys disappear.
+    Cutoff is derived from the constructor-injected clock seam (no
+    method-level clock parameter). Tests fake the clock at construction.
+    Idempotent: re-running rebuilds the sets from scratch, so
+    newly-expired keys disappear.
 
     Returns PruneSummary for diagnostic logging.
     """
@@ -902,7 +902,7 @@ uv run ruff check .                                             # no lint regres
 rg "_jsonl_contains" server/ scripts/                           # zero hits in production code
 rg "_seen_sets_initialized" server/ scripts/                    # zero hits — the unified flag was split into per-file flags
 rg "except \(OSError, UnicodeDecodeError\)" scripts/            # zero hits — round-6 narrowed the bootstrap catch to OSError only
-rg 'newline="\\n"' server/journal.py                           # expected hits: 1 prune temp-file + N append writers — spot-check each site opens with newline="\n"
+rg 'newline="\\n"' server/journal.py                           # expected hits: 4 (1 prune temp-file + append_audit_event + append_outcome + append_delegation_outcome); if new writers are added, update the count and explain each additional site
 ```
 
 The `_quarantine_corrupt_jsonl` helper (round-6 F1) must be called from exactly four sites in `server/journal.py`: two from `prune_audit_logs` (audit and outcomes try/except blocks) and one each from `_ensure_audit_seen_loaded` and `_ensure_outcomes_seen_loaded`. A `rg "_quarantine_corrupt_jsonl" server/journal.py` returning fewer than 5 matches (1 def + 4 call sites) means the failure-class-boundary closure did not land everywhere. Spot-check by reading the four call sites for the `except UnicodeDecodeError` catch.
