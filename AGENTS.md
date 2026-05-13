@@ -4,7 +4,7 @@ Instructions for AI coding agents working in this repository.
 
 codex-collaboration is a Claude Code plugin, currently in standalone repo form at `/Users/jp/Projects/active/codex-collaboration`. The plugin gives Claude a structured second-opinion lane to OpenAI Codex via three capabilities (consultation, dialogue, delegation) across two capability classes (advisory, execution).
 
-This repository is the development environment for the plugin: it contains the MCP server (~14K LOC Python), specs, hooks, skills, agents, scripts, and tests (1101 tests). Source paths live at the repo root (no `packages/plugins/...` prefix).
+This repository is the development environment for the plugin: it contains the MCP server (~14K LOC Python), specs, hooks, skills, agents, scripts, and tests (1172 tests). Source paths live at the repo root (no `packages/plugins/...` prefix).
 
 ## Authority
 
@@ -55,7 +55,7 @@ uv run pytest tests -q
 uv run ruff check .
 ```
 
-The pytest suite has 1101 tests and takes ~4-5 minutes. A standalone CI workflow runs the same set on every push.
+The pytest suite has 1172 tests and takes ~4-5 minutes. A standalone CI workflow runs the same set on every push.
 
 ### Filesystem Layout (for path-touching code)
 
