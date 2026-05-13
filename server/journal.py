@@ -518,10 +518,14 @@ class OperationJournal:
             return
 
         new_audit_seen: set[_AuditDedupKey] = set()
-        self._populate_seen_from_file(
-            self._audit_path,
-            lambda record: _populate_from_audit_record(record, new_audit_seen),
-        )
+        try:
+            self._populate_seen_from_file(
+                self._audit_path,
+                lambda record: _populate_from_audit_record(record, new_audit_seen),
+            )
+        except UnicodeDecodeError as exc:
+            self._quarantine_corrupt_jsonl(self._audit_path, reason=exc)
+            new_audit_seen = set()
         self._audit_seen = new_audit_seen
         self._audit_seen_initialized = True
 
@@ -531,14 +535,19 @@ class OperationJournal:
 
         new_dialogue_outcomes_seen: set[_DialogueOutcomeDedupKey] = set()
         new_delegation_outcomes_seen: set[_DelegationOutcomeDedupKey] = set()
-        self._populate_seen_from_file(
-            self._outcomes_path,
-            lambda record: _populate_from_outcome_record(
-                record,
-                new_dialogue_outcomes_seen,
-                new_delegation_outcomes_seen,
-            ),
-        )
+        try:
+            self._populate_seen_from_file(
+                self._outcomes_path,
+                lambda record: _populate_from_outcome_record(
+                    record,
+                    new_dialogue_outcomes_seen,
+                    new_delegation_outcomes_seen,
+                ),
+            )
+        except UnicodeDecodeError as exc:
+            self._quarantine_corrupt_jsonl(self._outcomes_path, reason=exc)
+            new_dialogue_outcomes_seen = set()
+            new_delegation_outcomes_seen = set()
         self._dialogue_outcomes_seen = new_dialogue_outcomes_seen
         self._delegation_outcomes_seen = new_delegation_outcomes_seen
         self._outcomes_seen_initialized = True
@@ -553,24 +562,45 @@ class OperationJournal:
         new_audit_seen: set[_AuditDedupKey] = set()
         new_dialogue_outcomes_seen: set[_DialogueOutcomeDedupKey] = set()
         new_delegation_outcomes_seen: set[_DelegationOutcomeDedupKey] = set()
+        audit_quarantined_to: Path | None = None
+        outcomes_quarantined_to: Path | None = None
 
-        audit_stats = self._prune_jsonl_pass(
-            path=self._audit_path,
-            cutoff=cutoff,
-            populate=lambda record: _populate_from_audit_record(record, new_audit_seen),
-        )
+        try:
+            audit_stats = self._prune_jsonl_pass(
+                path=self._audit_path,
+                cutoff=cutoff,
+                populate=lambda record: _populate_from_audit_record(
+                    record, new_audit_seen
+                ),
+            )
+        except UnicodeDecodeError as exc:
+            audit_quarantined_to = self._quarantine_corrupt_jsonl(
+                self._audit_path,
+                reason=exc,
+            )
+            audit_stats = _PruneFileStats(0, 0, 0)
+            new_audit_seen = set()
         self._audit_seen = new_audit_seen
         self._audit_seen_initialized = True
 
-        outcomes_stats = self._prune_jsonl_pass(
-            path=self._outcomes_path,
-            cutoff=cutoff,
-            populate=lambda record: _populate_from_outcome_record(
-                record,
-                new_dialogue_outcomes_seen,
-                new_delegation_outcomes_seen,
-            ),
-        )
+        try:
+            outcomes_stats = self._prune_jsonl_pass(
+                path=self._outcomes_path,
+                cutoff=cutoff,
+                populate=lambda record: _populate_from_outcome_record(
+                    record,
+                    new_dialogue_outcomes_seen,
+                    new_delegation_outcomes_seen,
+                ),
+            )
+        except UnicodeDecodeError as exc:
+            outcomes_quarantined_to = self._quarantine_corrupt_jsonl(
+                self._outcomes_path,
+                reason=exc,
+            )
+            outcomes_stats = _PruneFileStats(0, 0, 0)
+            new_dialogue_outcomes_seen = set()
+            new_delegation_outcomes_seen = set()
         self._dialogue_outcomes_seen = new_dialogue_outcomes_seen
         self._delegation_outcomes_seen = new_delegation_outcomes_seen
         self._outcomes_seen_initialized = True
@@ -582,7 +612,37 @@ class OperationJournal:
             outcomes_retained=outcomes_stats.retained,
             outcomes_dropped=outcomes_stats.dropped,
             outcomes_retained_malformed=outcomes_stats.retained_malformed,
+            audit_quarantined_to=audit_quarantined_to,
+            outcomes_quarantined_to=outcomes_quarantined_to,
         )
+
+    def _quarantine_corrupt_jsonl(
+        self,
+        path: Path,
+        *,
+        reason: Exception,
+    ) -> Path:
+        """Rename a UTF-8-corrupt journal file to a forensic sibling."""
+
+        timestamp = self._now().strftime("%Y%m%dT%H%M%SZ")
+        quarantine_path = path.with_name(
+            f"{path.stem}.corrupt-{timestamp}{path.suffix}"
+        )
+        counter = 0
+        while quarantine_path.exists():
+            counter += 1
+            quarantine_path = path.with_name(
+                f"{path.stem}.corrupt-{timestamp}.{counter}{path.suffix}"
+            )
+
+        path.rename(quarantine_path)
+        logger.warning(
+            "quarantined corrupt journal file: %s -> %s (reason: %r)",
+            path,
+            quarantine_path,
+            reason,
+        )
+        return quarantine_path
 
     def _prune_jsonl_pass(
         self,
