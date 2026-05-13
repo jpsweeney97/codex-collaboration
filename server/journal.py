@@ -391,16 +391,12 @@ class OperationJournal:
     def append_dialogue_audit_event_once(self, event: AuditEvent) -> None:
         """Append a dialogue audit event unless the logical record already exists."""
 
-        if self._jsonl_contains(
-            self._audit_path,
-            lambda record: (
-                record.get("action") == event.action
-                and record.get("collaboration_id") == event.collaboration_id
-                and record.get("turn_id") == event.turn_id
-            ),
-        ):
+        self._ensure_audit_seen_loaded()
+        key: _AuditDedupKey = (event.action, event.collaboration_id, event.turn_id)
+        if key in self._audit_seen:
             return
         self.append_audit_event(event)
+        self._audit_seen.add(key)
 
     def append_outcome(self, record: OutcomeRecord) -> None:
         """Append an analytics outcome record as JSONL."""
@@ -411,16 +407,16 @@ class OperationJournal:
     def append_dialogue_outcome_once(self, record: OutcomeRecord) -> None:
         """Append a dialogue outcome unless the logical record already exists."""
 
-        if self._jsonl_contains(
-            self._outcomes_path,
-            lambda existing: (
-                existing.get("outcome_type") == record.outcome_type
-                and existing.get("collaboration_id") == record.collaboration_id
-                and existing.get("turn_id") == record.turn_id
-            ),
-        ):
+        self._ensure_outcomes_seen_loaded()
+        key: _DialogueOutcomeDedupKey = (
+            record.outcome_type,
+            record.collaboration_id,
+            record.turn_id,
+        )
+        if key in self._dialogue_outcomes_seen:
             return
         self.append_outcome(record)
+        self._dialogue_outcomes_seen.add(key)
 
     def append_delegation_outcome(self, record: DelegationOutcomeRecord) -> None:
         """Append a delegation terminal outcome record as JSONL."""
@@ -431,15 +427,12 @@ class OperationJournal:
     def append_delegation_outcome_once(self, record: DelegationOutcomeRecord) -> None:
         """Append a delegation outcome unless one exists for this job."""
 
-        if self._jsonl_contains(
-            self._outcomes_path,
-            lambda existing: (
-                existing.get("outcome_type") == record.outcome_type
-                and existing.get("job_id") == record.job_id
-            ),
-        ):
+        self._ensure_outcomes_seen_loaded()
+        key: _DelegationOutcomeDedupKey = (record.outcome_type, record.job_id)
+        if key in self._delegation_outcomes_seen:
             return
         self.append_delegation_outcome(record)
+        self._delegation_outcomes_seen.add(key)
 
     def write_phase(self, entry: OperationJournalEntry, *, session_id: str) -> None:
         """Append a phased journal record with fsync."""
@@ -500,6 +493,55 @@ class OperationJournal:
 
     def _operations_path(self, session_id: str) -> Path:
         return self._journal_dir / "operations" / f"{session_id}.jsonl"
+
+    def _populate_seen_from_file(
+        self,
+        path: Path,
+        on_record: Callable[[dict[str, Any]], None],
+    ) -> None:
+        if not path.exists():
+            return
+        with path.open(encoding="utf-8") as handle:
+            for line in handle:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                try:
+                    record = json.loads(stripped)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(record, dict):
+                    on_record(record)
+
+    def _ensure_audit_seen_loaded(self) -> None:
+        if self._audit_seen_initialized:
+            return
+
+        new_audit_seen: set[_AuditDedupKey] = set()
+        self._populate_seen_from_file(
+            self._audit_path,
+            lambda record: _populate_from_audit_record(record, new_audit_seen),
+        )
+        self._audit_seen = new_audit_seen
+        self._audit_seen_initialized = True
+
+    def _ensure_outcomes_seen_loaded(self) -> None:
+        if self._outcomes_seen_initialized:
+            return
+
+        new_dialogue_outcomes_seen: set[_DialogueOutcomeDedupKey] = set()
+        new_delegation_outcomes_seen: set[_DelegationOutcomeDedupKey] = set()
+        self._populate_seen_from_file(
+            self._outcomes_path,
+            lambda record: _populate_from_outcome_record(
+                record,
+                new_dialogue_outcomes_seen,
+                new_delegation_outcomes_seen,
+            ),
+        )
+        self._dialogue_outcomes_seen = new_dialogue_outcomes_seen
+        self._delegation_outcomes_seen = new_delegation_outcomes_seen
+        self._outcomes_seen_initialized = True
 
     def prune_audit_logs(self) -> PruneSummary:
         now = self._now()
@@ -603,25 +645,6 @@ class OperationJournal:
         os.replace(tmp_path, path)
 
         return _PruneFileStats(retained_count, dropped_count, retained_malformed_count)
-
-    @staticmethod
-    def _jsonl_contains(
-        path: Path, predicate: Callable[[dict[str, Any]], bool]
-    ) -> bool:
-        if not path.exists():
-            return False
-        with path.open(encoding="utf-8") as handle:
-            for line in handle:
-                stripped = line.strip()
-                if not stripped:
-                    continue
-                try:
-                    record = json.loads(stripped)
-                except json.JSONDecodeError:
-                    continue
-                if isinstance(record, dict) and predicate(record):
-                    return True
-        return False
 
     def _now(self) -> datetime:
         """Current time per the injected clock."""

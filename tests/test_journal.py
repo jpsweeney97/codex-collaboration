@@ -4,7 +4,7 @@ import json
 import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 import pytest
 
@@ -553,6 +553,245 @@ def test_prune_audit_logs_partial_failure_keeps_outcomes_flag_cleared(
 
     assert journal._audit_seen_initialized is True
     assert journal._outcomes_seen_initialized is False
+
+
+class TestAuditRetentionSeenSets:
+    def test_append_dialogue_audit_event_once_loads_audit_seen_on_first_call(
+        self, tmp_path: Path
+    ) -> None:
+        journal = OperationJournal(tmp_path / "plugin-data")
+        audit_path = tmp_path / "plugin-data" / "audit" / "events.jsonl"
+        journal.append_audit_event(_audit_event(event_id="existing"))
+
+        journal.append_dialogue_audit_event_once(_audit_event(event_id="duplicate"))
+
+        assert [record["event_id"] for record in _read_jsonl(audit_path)] == [
+            "existing"
+        ]
+        assert journal._audit_seen_initialized is True
+        assert journal._outcomes_seen_initialized is False
+
+    def test_append_dialogue_outcome_once_loads_outcomes_seen_on_first_call(
+        self, tmp_path: Path
+    ) -> None:
+        journal = OperationJournal(tmp_path / "plugin-data")
+        outcomes_path = tmp_path / "plugin-data" / "analytics" / "outcomes.jsonl"
+        journal.append_outcome(_dialogue_outcome(outcome_id="existing"))
+
+        journal.append_dialogue_outcome_once(_dialogue_outcome(outcome_id="duplicate"))
+
+        assert [record["outcome_id"] for record in _read_jsonl(outcomes_path)] == [
+            "existing"
+        ]
+        assert journal._audit_seen_initialized is False
+        assert journal._outcomes_seen_initialized is True
+
+    def test_outcomes_seen_loaded_populates_dialogue_and_delegation_sets(
+        self, tmp_path: Path
+    ) -> None:
+        journal = OperationJournal(tmp_path / "plugin-data")
+        outcomes_path = tmp_path / "plugin-data" / "analytics" / "outcomes.jsonl"
+        journal.append_outcome(_dialogue_outcome(outcome_id="dialogue"))
+        journal.append_delegation_outcome(_delegation_outcome(outcome_id="delegation"))
+
+        journal.append_dialogue_outcome_once(_dialogue_outcome(outcome_id="dupe-dialogue"))
+        journal.append_delegation_outcome_once(
+            _delegation_outcome(outcome_id="dupe-delegation")
+        )
+
+        assert [record["outcome_id"] for record in _read_jsonl(outcomes_path)] == [
+            "dialogue",
+            "delegation",
+        ]
+
+    def test_append_dialogue_audit_event_once_skips_when_key_in_seen_set(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        journal = OperationJournal(tmp_path / "plugin-data")
+        event = _audit_event()
+        journal._audit_seen = {(event.action, event.collaboration_id, event.turn_id)}
+        journal._audit_seen_initialized = True
+
+        def must_not_be_called(event: AuditEvent) -> None:
+            raise AssertionError("append_audit_event called despite seen-set hit")
+
+        monkeypatch.setattr(journal, "append_audit_event", must_not_be_called)
+
+        journal.append_dialogue_audit_event_once(event)
+
+    def test_append_dialogue_outcome_once_skips_when_key_in_seen_set(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        journal = OperationJournal(tmp_path / "plugin-data")
+        record = _dialogue_outcome()
+        journal._dialogue_outcomes_seen = {
+            (record.outcome_type, record.collaboration_id, record.turn_id)
+        }
+        journal._outcomes_seen_initialized = True
+
+        def must_not_be_called(record: OutcomeRecord) -> None:
+            raise AssertionError("append_outcome called despite seen-set hit")
+
+        monkeypatch.setattr(journal, "append_outcome", must_not_be_called)
+
+        journal.append_dialogue_outcome_once(record)
+
+    def test_append_delegation_outcome_once_skips_when_key_in_seen_set(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        journal = OperationJournal(tmp_path / "plugin-data")
+        record = _delegation_outcome()
+        journal._delegation_outcomes_seen = {(record.outcome_type, record.job_id)}
+        journal._outcomes_seen_initialized = True
+
+        def must_not_be_called(record: DelegationOutcomeRecord) -> None:
+            raise AssertionError(
+                "append_delegation_outcome called despite seen-set hit"
+            )
+
+        monkeypatch.setattr(journal, "append_delegation_outcome", must_not_be_called)
+
+        journal.append_delegation_outcome_once(record)
+
+
+def test_append_dialogue_audit_event_once_updates_seen_only_after_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    journal = OperationJournal(tmp_path / "plugin-data")
+    event = _audit_event(event_id="event-1")
+
+    def fail_append(event: AuditEvent) -> None:
+        raise OSError("append failed")
+
+    monkeypatch.setattr(journal, "append_audit_event", fail_append)
+    with pytest.raises(OSError, match="append failed"):
+        journal.append_dialogue_audit_event_once(event)
+
+    assert (event.action, event.collaboration_id, event.turn_id) not in journal._audit_seen
+
+    monkeypatch.undo()
+    journal.append_dialogue_audit_event_once(event)
+
+    audit_path = tmp_path / "plugin-data" / "audit" / "events.jsonl"
+    assert len(_read_jsonl(audit_path)) == 1
+
+
+def test_unreadable_outcomes_does_not_block_audit_append_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    journal = OperationJournal(tmp_path / "plugin-data")
+    original_populate = journal._populate_seen_from_file
+
+    def fail_outcomes_only(
+        path: Path, on_record: Callable[[dict[str, Any]], None]
+    ) -> None:
+        if path == journal._outcomes_path:
+            raise OSError("outcomes unreadable")
+        original_populate(path, on_record)
+
+    monkeypatch.setattr(journal, "_populate_seen_from_file", fail_outcomes_only)
+
+    journal.append_dialogue_audit_event_once(_audit_event())
+    with pytest.raises(OSError, match="outcomes unreadable"):
+        journal.append_dialogue_outcome_once(_dialogue_outcome())
+
+
+def test_ensure_audit_seen_loaded_tolerates_corrupt_jsonl_line(
+    tmp_path: Path,
+) -> None:
+    journal = OperationJournal(tmp_path / "plugin-data")
+    audit_path = tmp_path / "plugin-data" / "audit" / "events.jsonl"
+    audit_path.parent.mkdir(parents=True, exist_ok=True)
+    initial_content = (
+        "{not-valid-json\n"
+        '{"event_id":"valid","timestamp":"2026-05-01T00:00:00Z",'
+        '"actor":"claude","action":"dialogue_turn",'
+        '"collaboration_id":"collab-1","runtime_id":"rt-1",'
+        '"turn_id":"turn-1"}\n'
+    )
+    audit_path.write_text(initial_content, encoding="utf-8")
+
+    journal.append_dialogue_audit_event_once(_audit_event(event_id="duplicate"))
+
+    assert audit_path.read_text(encoding="utf-8") == initial_content
+    assert journal._audit_seen_initialized is True
+
+
+def test_ensure_outcomes_seen_loaded_tolerates_corrupt_jsonl_line(
+    tmp_path: Path,
+) -> None:
+    journal = OperationJournal(tmp_path / "plugin-data")
+    outcomes_path = tmp_path / "plugin-data" / "analytics" / "outcomes.jsonl"
+    outcomes_path.parent.mkdir(parents=True, exist_ok=True)
+    initial_content = (
+        "{not-valid-json\n"
+        '{"outcome_id":"valid","timestamp":"2026-05-01T00:00:00Z",'
+        '"outcome_type":"dialogue_turn","collaboration_id":"collab-1",'
+        '"runtime_id":"rt-1","context_size":1024,"turn_id":"turn-1",'
+        '"turn_sequence":1}\n'
+    )
+    outcomes_path.write_text(initial_content, encoding="utf-8")
+
+    journal.append_dialogue_outcome_once(_dialogue_outcome(outcome_id="duplicate"))
+
+    assert outcomes_path.read_text(encoding="utf-8") == initial_content
+    assert journal._outcomes_seen_initialized is True
+
+
+def test_ensure_audit_seen_loaded_does_not_mark_initialized_on_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    journal = OperationJournal(tmp_path / "plugin-data")
+
+    real_populate = journal._populate_seen_from_file
+    call_count = {"n": 0}
+
+    def fail_first_then_succeed(
+        path: Path, on_record: Callable[[dict[str, Any]], None]
+    ) -> None:
+        call_count["n"] += 1
+        if path == journal._audit_path and call_count["n"] == 1:
+            raise OSError("transient io failure")
+        real_populate(path, on_record)
+
+    monkeypatch.setattr(journal, "_populate_seen_from_file", fail_first_then_succeed)
+
+    with pytest.raises(OSError, match="transient io failure"):
+        journal.append_dialogue_audit_event_once(_audit_event())
+
+    assert journal._audit_seen_initialized is False
+    assert journal._outcomes_seen_initialized is False
+
+    journal.append_dialogue_audit_event_once(_audit_event())
+    assert journal._audit_seen_initialized is True
+
+
+def test_ensure_outcomes_seen_loaded_does_not_mark_initialized_on_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    journal = OperationJournal(tmp_path / "plugin-data")
+
+    real_populate = journal._populate_seen_from_file
+    call_count = {"n": 0}
+
+    def fail_first_then_succeed(
+        path: Path, on_record: Callable[[dict[str, Any]], None]
+    ) -> None:
+        call_count["n"] += 1
+        if path == journal._outcomes_path and call_count["n"] == 1:
+            raise OSError("transient io failure")
+        real_populate(path, on_record)
+
+    monkeypatch.setattr(journal, "_populate_seen_from_file", fail_first_then_succeed)
+
+    with pytest.raises(OSError, match="transient io failure"):
+        journal.append_dialogue_outcome_once(_dialogue_outcome())
+
+    assert journal._outcomes_seen_initialized is False
+    assert journal._audit_seen_initialized is False
+
+    journal.append_dialogue_outcome_once(_dialogue_outcome())
+    assert journal._outcomes_seen_initialized is True
 
 
 class TestPhasedJournal:
