@@ -160,6 +160,7 @@ class TestBootstrapRetentionPrune:
         assert len(runs) == 1
         assert "audit prune complete:" in caplog.text
         assert "audit_quarantined_to=None" in caplog.text
+        assert "outcomes_quarantined_to=None" in caplog.text
 
     def test_bootstrap_warns_summary_when_prune_succeeds_with_nonzero_audit_malformed(
         self,
