@@ -35,6 +35,21 @@ def _import_bootstrap():
     return mod
 
 
+def _patch_bootstrap_run(
+    monkeypatch: pytest.MonkeyPatch,
+    mod: object,
+    tmp_path: Path,
+) -> list[object]:
+    runs: list[object] = []
+    monkeypatch.setattr(mod, "default_plugin_data_path", lambda: tmp_path)
+
+    def fake_run(self: object) -> None:
+        runs.append(self)
+
+    monkeypatch.setattr(mod.McpServer, "run", fake_run)
+    return runs
+
+
 class TestReadSessionId:
     """Tests for _read_session_id from the bootstrap script."""
 
@@ -127,6 +142,146 @@ class TestBuildDialogueFactory:
         )
         with pytest.raises(RuntimeError, match="session identity not yet available"):
             factory()
+
+
+class TestBootstrapRetentionPrune:
+    def test_bootstrap_logs_info_summary_when_prune_succeeds_with_zero_malformed(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        mod = _import_bootstrap()
+        runs = _patch_bootstrap_run(monkeypatch, mod, tmp_path)
+
+        with caplog.at_level("INFO"):
+            mod.main()
+
+        assert len(runs) == 1
+        assert "audit prune complete:" in caplog.text
+        assert "audit_quarantined_to=None" in caplog.text
+
+    def test_bootstrap_warns_summary_when_prune_succeeds_with_nonzero_audit_malformed(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        mod = _import_bootstrap()
+        _patch_bootstrap_run(monkeypatch, mod, tmp_path)
+        audit_path = tmp_path / "audit" / "events.jsonl"
+        audit_path.parent.mkdir(parents=True)
+        audit_path.write_text('{"timestamp": "not-a-date"}\n', encoding="utf-8")
+
+        with caplog.at_level("WARNING"):
+            mod.main()
+
+        assert "audit_retained_malformed=1" in caplog.text
+
+    def test_bootstrap_warns_summary_when_prune_succeeds_with_nonzero_outcomes_malformed(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        mod = _import_bootstrap()
+        _patch_bootstrap_run(monkeypatch, mod, tmp_path)
+        outcomes_path = tmp_path / "analytics" / "outcomes.jsonl"
+        outcomes_path.parent.mkdir(parents=True)
+        outcomes_path.write_text('{"timestamp": "not-a-date"}\n', encoding="utf-8")
+
+        with caplog.at_level("WARNING"):
+            mod.main()
+
+        assert "outcomes_retained_malformed=1" in caplog.text
+
+    def test_bootstrap_warns_when_prune_raises_oserror(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        mod = _import_bootstrap()
+        runs = _patch_bootstrap_run(monkeypatch, mod, tmp_path)
+
+        def fail_prune(self: object) -> object:
+            raise OSError("prune failed")
+
+        monkeypatch.setattr(mod.OperationJournal, "prune_audit_logs", fail_prune)
+
+        with caplog.at_level("WARNING"):
+            mod.main()
+
+        assert len(runs) == 1
+        assert "startup retention cleanup failed or incomplete; continuing" in caplog.text
+
+    def test_bootstrap_warns_summary_when_audit_quarantined(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        mod = _import_bootstrap()
+        _patch_bootstrap_run(monkeypatch, mod, tmp_path)
+        audit_path = tmp_path / "audit" / "events.jsonl"
+        audit_path.parent.mkdir(parents=True)
+        audit_path.write_bytes(b"\x80abc\n")
+
+        with caplog.at_level("WARNING"):
+            mod.main()
+
+        assert "audit_quarantined_to=" in caplog.text
+        assert "events.corrupt-" in caplog.text
+
+    def test_bootstrap_warns_summary_when_outcomes_quarantined(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        mod = _import_bootstrap()
+        _patch_bootstrap_run(monkeypatch, mod, tmp_path)
+        outcomes_path = tmp_path / "analytics" / "outcomes.jsonl"
+        outcomes_path.parent.mkdir(parents=True)
+        outcomes_path.write_bytes(b"\x80abc\n")
+
+        with caplog.at_level("WARNING"):
+            mod.main()
+
+        assert "outcomes_quarantined_to=" in caplog.text
+        assert "outcomes.corrupt-" in caplog.text
+
+    def test_bootstrap_does_not_swallow_unicode_decode_error_directly(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        mod = _import_bootstrap()
+        _patch_bootstrap_run(monkeypatch, mod, tmp_path)
+
+        def fail_prune(self: object) -> object:
+            raise UnicodeDecodeError("utf-8", b"\x80", 0, 1, "invalid start byte")
+
+        monkeypatch.setattr(mod.OperationJournal, "prune_audit_logs", fail_prune)
+
+        with pytest.raises(UnicodeDecodeError):
+            mod.main()
+
+    def test_bootstrap_does_not_swallow_value_error(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        mod = _import_bootstrap()
+        _patch_bootstrap_run(monkeypatch, mod, tmp_path)
+
+        def fail_prune(self: object) -> object:
+            raise ValueError("bad clock")
+
+        monkeypatch.setattr(mod.OperationJournal, "prune_audit_logs", fail_prune)
+
+        with pytest.raises(ValueError, match="bad clock"):
+            mod.main()
 
 
 class TestPublishSessionIdHook:
