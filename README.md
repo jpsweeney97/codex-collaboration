@@ -14,7 +14,7 @@ Codex advisory consultation, durable dialogue, and isolated delegation via direc
 ├── scripts/                 # Plugin scripts (bootstrap, guards, smoke setup)
 ├── hooks/                   # Hook configuration (hooks.json)
 ├── references/              # Reference material (tag grammar, dialogue contract)
-├── tests/                   # pytest suite (1101 tests) + JSON fixtures
+├── tests/                   # pytest suite (1172 tests) + JSON fixtures
 ├── .mcp.json                # MCP server registration
 ├── .claude-plugin/          # Plugin manifest (plugin.json)
 ├── pyproject.toml           # Standalone Python project
@@ -137,7 +137,7 @@ The plugin reads the following environment variables at module load. Plugin rest
 ## Tests
 
 ```bash
-uv run pytest tests -q              # full suite (1101 tests, ~4-5 min)
+uv run pytest tests -q              # full suite (1172 tests, ~4-5 min)
 uv run pytest tests/test_runtime.py # single file
 uv run ruff check .                 # lint
 ```

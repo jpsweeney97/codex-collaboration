@@ -492,7 +492,7 @@ All gates run from `/Users/jp/Projects/active/codex-collaboration/` with `PYTHON
 |---|---|---|
 | Dependency resolution | `uv sync` | OK — 7 packages installed (`iniconfig`, `packaging`, `pluggy`, `pygments`, `pytest 9.0.3`, `pyyaml 6.0.3`, `ruff 0.15.12`) |
 | Lint | `uv run ruff check .` | `All checks passed!` |
-| Full test suite | `uv run pytest tests -q` | `1101 passed in 253.96s` |
+| Full test suite | `uv run pytest tests -q` | `1172 passed in 255.99s` |
 | MCP config | `uv run python -m json.tool .mcp.json` | OK |
 | Plugin manifest | `uv run python -m json.tool .claude-plugin/plugin.json` | OK |
 | Hooks config | `uv run python -m json.tool hooks/hooks.json` | OK |
