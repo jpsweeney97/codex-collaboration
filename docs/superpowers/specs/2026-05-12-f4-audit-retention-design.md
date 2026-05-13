@@ -48,6 +48,7 @@ After this slice lands, the following hold:
 - Spec amendments to `docs/specs/recovery-and-journal.md`: §Two-Log Architecture table retention row, new §Operational Outcomes subsection, §Audit Log → Retention subsection rewrite, and §Retention Defaults table.
 - New tests in `tests/test_journal.py` (journal-internal: pruning, dedup, atomic-rewrite, per-file lifecycle) and `tests/test_bootstrap.py` (§8.9 bootstrap-integration invariants).
 - Migration of any existing tests that exercised `_jsonl_contains` semantics.
+- Consumer-doc updates to reflect the 30-day outcome retention horizon: `docs/specs/decisions.md` (analytics-source bullet) and `skills/codex-analytics/SKILL.md` (data-location section). Both currently describe outcomes as unbounded append-only data; they must note the 30-day operational window and that records beyond it are pruned at startup.
 
 ### Out (deferred)
 
@@ -177,8 +178,8 @@ Same shape for `append_dialogue_outcome_once` and `append_delegation_outcome_onc
 
 ### Private methods
 
-- `_ensure_audit_seen_loaded()` — populate `_audit_seen` from `events.jsonl` without rewriting. Atomic rebuild semantics (local set, assigned only on success or quarantine). Catches `UnicodeDecodeError` from the read, quarantines the corrupt file via `_quarantine_corrupt_jsonl`, and assigns the relevant set to empty before flipping the flag to `True` (§5.7). Does not flip `_audit_seen_initialized` if population raises a non-UTF-8 exception (e.g., `OSError`).
-- `_ensure_outcomes_seen_loaded()` — populate both `_dialogue_outcomes_seen` and `_delegation_outcomes_seen` from `outcomes.jsonl` in a single read pass (one disk read, two sets). Same UTF-8 quarantine handling as `_ensure_audit_seen_loaded`. Does not flip `_outcomes_seen_initialized` if population raises a non-UTF-8 exception.
+- `_ensure_audit_seen_loaded()` — populate `_audit_seen` from `events.jsonl` without rewriting. Atomic rebuild semantics (local set, assigned only on success or quarantine). Catches `UnicodeDecodeError` from the read, quarantines the corrupt file via `_quarantine_corrupt_jsonl`, resets the local builder set to empty (clearing any keys added by the populate callback before the bad byte), and assigns the empty set before flipping the flag to `True` (§5.7). Does not flip `_audit_seen_initialized` if population raises a non-UTF-8 exception (e.g., `OSError`).
+- `_ensure_outcomes_seen_loaded()` — populate both `_dialogue_outcomes_seen` and `_delegation_outcomes_seen` from `outcomes.jsonl` in a single read pass (one disk read, two sets). Same UTF-8 quarantine handling as `_ensure_audit_seen_loaded`, including reset of both local builder sets on quarantine. Does not flip `_outcomes_seen_initialized` if population raises a non-UTF-8 exception.
 - `_prune_jsonl_pass(*, path, cutoff, populate)` — single linear scan; produces retained raw lines and per-file stats. Pins `newline="\n"` on the temp-file write (§5.2). Raises `UnicodeDecodeError` on byte-level corruption — caller (`prune_audit_logs`) catches and quarantines per file.
 - `_populate_seen_from_file(path, on_record)` — read-only population helper used by the two `_ensure_*_seen_loaded` methods. Raises `UnicodeDecodeError` on byte-level corruption — caller catches and quarantines.
 - `_quarantine_corrupt_jsonl(path, *, reason)` — rename a UTF-8-corrupt file to a forensic sibling `<stem>.corrupt-<utc-ts><suffix>`; resolve target collisions with deterministic `.1`, `.2`, ... numeric suffix; log at `WARNING` with original path, quarantine path, and reason exception; return the quarantine path. `OSError` from the rename propagates (IO-class failure, not UTF-8 class). Called from both `prune_audit_logs` and the two `_ensure_*_seen_loaded` methods (§5.2c).
@@ -306,9 +307,10 @@ def prune_audit_logs(self) -> PruneSummary:
             self._audit_path, reason=exc,
         )
         audit_stats = _PruneFileStats(retained=0, dropped=0, retained_malformed=0)
-        # new_audit_seen remains empty; subsequent appends are deduped against
-        # an empty set, allowing records present only in the quarantined file
-        # to re-append as duplicates (§2 Contract quarantine trade-off).
+        # The populate callback may have added keys to new_audit_seen before
+        # the bad byte was reached. Reset to empty so the contract holds:
+        # "relevant in-memory seen-set(s) become empty" (§2).
+        new_audit_seen = set()
 
     # Atomic per-file commit: audit seen-set assigned and flag restored
     # immediately after its pass completes (or after quarantine). Independent
@@ -329,7 +331,10 @@ def prune_audit_logs(self) -> PruneSummary:
             self._outcomes_path, reason=exc,
         )
         outcomes_stats = _PruneFileStats(retained=0, dropped=0, retained_malformed=0)
-        # Both outcomes seen-sets remain empty for the same reason as audit.
+        # Reset both outcomes builders — the populate callback may have
+        # added keys before the bad byte was reached (§2 contract: empty).
+        new_dialogue_outcomes_seen = set()
+        new_delegation_outcomes_seen = set()
 
     # Atomic per-file commit: both outcomes seen-sets assigned and flag
     # restored after the single outcomes pass completes (or after quarantine).
@@ -548,10 +553,9 @@ def _ensure_audit_seen_loaded(self) -> None:
         )
     except UnicodeDecodeError as exc:
         self._quarantine_corrupt_jsonl(self._audit_path, reason=exc)
-        # new_audit_seen remains empty; next append_dialogue_audit_event_once
-        # writes a fresh events.jsonl (§2 Contract quarantine trade-off:
-        # records present only in the quarantined file may re-append as
-        # duplicates).
+        # Reset — the populate callback may have added keys before the bad
+        # byte. Contract requires empty seen-set post-quarantine (§2).
+        new_audit_seen = set()
 
     self._audit_seen = new_audit_seen
     self._audit_seen_initialized = True
@@ -580,14 +584,17 @@ def _ensure_outcomes_seen_loaded(self) -> None:
         )
     except UnicodeDecodeError as exc:
         self._quarantine_corrupt_jsonl(self._outcomes_path, reason=exc)
-        # Both outcomes seen-sets remain empty for the same reason as audit.
+        # Reset both — partial keys from valid lines before the bad byte
+        # must not survive quarantine (§2 contract: empty).
+        new_dialogue_outcomes_seen = set()
+        new_delegation_outcomes_seen = set()
 
     self._dialogue_outcomes_seen = new_dialogue_outcomes_seen
     self._delegation_outcomes_seen = new_delegation_outcomes_seen
     self._outcomes_seen_initialized = True
 ```
 
-`_populate_seen_from_file` tolerates malformed lines exactly as the legacy `_jsonl_contains` did: blank lines, `json.JSONDecodeError`, and non-dict records are skipped. A corrupt historical line never disables future writes. **Invalid UTF-8 is byte-level corruption and triggers quarantine on this path, not propagation.** Each `_ensure_*_seen_loaded` catches `UnicodeDecodeError` from `_populate_seen_from_file`, invokes `_quarantine_corrupt_jsonl` (§5.2c), leaves the local seen-set builders empty, and flips the per-file flag to `True`. The next `append_*_once` writes a fresh JSONL record to a newly-created file. This handling is **identical** to the startup-prune handling in `prune_audit_logs`, closing the failure-class boundary that round-6 F1 identified: there is no longer a runtime path where a corrupt file at startup leaks `UnicodeDecodeError` into `dialogue._finalize_confirmed_turn` and becomes `CommittedTurnFinalizationError`. The explicit duplicate-record trade-off (§2 Contract) applies on this path too — records present only in the quarantined file may re-append as duplicates on subsequent calls.
+`_populate_seen_from_file` tolerates malformed lines exactly as the legacy `_jsonl_contains` did: blank lines, `json.JSONDecodeError`, and non-dict records are skipped. A corrupt historical line never disables future writes. **Invalid UTF-8 is byte-level corruption and triggers quarantine on this path, not propagation.** Each `_ensure_*_seen_loaded` catches `UnicodeDecodeError` from `_populate_seen_from_file`, invokes `_quarantine_corrupt_jsonl` (§5.2c), resets the local seen-set builder(s) to empty (clearing any keys the populate callback added before the bad byte was reached), and flips the per-file flag to `True`. The next `append_*_once` writes a fresh JSONL record to a newly-created file. This handling is **identical** to the startup-prune handling in `prune_audit_logs`, closing the failure-class boundary that round-6 F1 identified: there is no longer a runtime path where a corrupt file at startup leaks `UnicodeDecodeError` into `dialogue._finalize_confirmed_turn` and becomes `CommittedTurnFinalizationError`. The explicit duplicate-record trade-off (§2 Contract) applies on this path too — records present only in the quarantined file may re-append as duplicates on subsequent calls.
 
 ### 5.8 Append-once update-after-success invariant
 
@@ -824,7 +831,7 @@ All journal-internal tests in `tests/test_journal.py`. **Bootstrap-integration t
 - `test_prune_audit_logs_retains_malformed_json_line` — invalid JSON; raw line preserved (record bytes unchanged; final-newline normalization only applied to the file's last line if it lacked one — see §8.3).
 - `test_prune_audit_logs_retains_non_dict_record` — array or scalar JSON line
 - `test_prune_audit_logs_drops_blank_lines`
-- `test_prune_audit_logs_quarantines_audit_on_invalid_utf8` — pre-populate `events.jsonl` with an invalid UTF-8 byte sequence (e.g., `b"\x80abc\n"`); inject a fixed UTC clock; call `prune_audit_logs()`; assert it does **not** raise; assert `events.jsonl` no longer exists at the original path; assert a sibling `events.corrupt-<expected-utc-ts>.jsonl` exists with the original byte sequence preserved; assert `summary.audit_quarantined_to` equals that quarantine path; assert `_audit_seen` is empty and `_audit_seen_initialized == True`. Pins F1 (round-6): byte-level corruption triggers quarantine, not pass abort. Mirror test (`test_prune_audit_logs_quarantines_outcomes_on_invalid_utf8`) for `outcomes.jsonl`.
+- `test_prune_audit_logs_quarantines_audit_on_invalid_utf8` — pre-populate `events.jsonl` with **valid JSONL records followed by an invalid UTF-8 byte sequence** (e.g., a well-formed audit event line then `b"\x80abc\n"`) to exercise the partial-population scenario; inject a fixed UTC clock; call `prune_audit_logs()`; assert it does **not** raise; assert `events.jsonl` no longer exists at the original path; assert a sibling `events.corrupt-<expected-utc-ts>.jsonl` exists with the original byte sequence preserved; assert `summary.audit_quarantined_to` equals that quarantine path; assert `_audit_seen` is empty and `_audit_seen_initialized == True` — the seen-set must be empty even though the populate callback processed the valid records before the bad byte (§2 contract: partial keys do not survive quarantine). Pins F1 (round-6) + round-8 partial-population fix. Mirror test (`test_prune_audit_logs_quarantines_outcomes_on_invalid_utf8`) for `outcomes.jsonl`.
 - `test_prune_audit_logs_quarantines_only_affected_file` — corrupt `events.jsonl` with invalid UTF-8; populate `outcomes.jsonl` with a single well-formed record; call `prune_audit_logs()`; assert audit was quarantined (`summary.audit_quarantined_to is not None`); assert outcomes pruned normally (`summary.outcomes_quarantined_to is None`, `summary.outcomes_retained == 1`). Pins F1 (round-6): quarantine isolation between files.
 - `test_quarantine_uses_deterministic_suffix_on_target_collision` — inject a fixed UTC clock; pre-create a file at the exact quarantine path the helper would generate (`events.corrupt-<fixed-utc-ts>.jsonl`); pre-populate `events.jsonl` with invalid UTF-8; call `prune_audit_logs()`; assert the new quarantine file uses the `.1` numeric suffix (`events.corrupt-<fixed-utc-ts>.1.jsonl`). Repeat with two pre-existing collisions to assert `.2`. Pins F1 (round-6): deterministic collision handling.
 - `test_quarantine_rename_oserror_propagates_as_oserror` — pre-populate `events.jsonl` with invalid UTF-8; monkey-patch `Path.rename` (or `os.rename`) to raise `OSError`; call `prune_audit_logs()`; assert it raises `OSError`, not `UnicodeDecodeError`. Pins F1 (round-6): quarantine itself does not catch broad exceptions; rename failure is an IO-class failure.
@@ -857,8 +864,8 @@ All journal-internal tests in `tests/test_journal.py`. **Bootstrap-integration t
 - `test_ensure_outcomes_seen_loaded_tolerates_corrupt_jsonl_line` — same for `outcomes.jsonl`.
 - `test_ensure_audit_seen_loaded_does_not_mark_initialized_on_failure` — patch population to raise a non-UTF-8 exception (e.g., `OSError`); assert `_audit_seen_initialized` remains `False` and second call retries; `_outcomes_seen_initialized` is unaffected.
 - `test_ensure_outcomes_seen_loaded_does_not_mark_initialized_on_failure` — same for outcomes flag with a non-UTF-8 exception; `_audit_seen_initialized` unaffected.
-- `test_ensure_audit_seen_loaded_quarantines_on_invalid_utf8` — construct journal without calling prune; pre-populate `events.jsonl` with an invalid UTF-8 byte sequence; call `append_dialogue_audit_event_once(...)` with a valid event; assert the corrupt file was renamed to a `events.corrupt-<utc-ts>.jsonl` sibling; assert the audit append succeeded against a fresh `events.jsonl` containing exactly one record; assert `_audit_seen_initialized == True` and `_audit_seen` contains exactly the newly-appended key (not any pre-quarantine ghost). Pins F1 (round-6): runtime path shares the same quarantine policy as startup, closing the failure-class boundary that would otherwise leak `UnicodeDecodeError` into `dialogue._finalize_confirmed_turn`.
-- `test_ensure_outcomes_seen_loaded_quarantines_on_invalid_utf8` — mirror for outcomes, using `append_dialogue_outcome_once`.
+- `test_ensure_audit_seen_loaded_quarantines_on_invalid_utf8` — construct journal without calling prune; pre-populate `events.jsonl` with **valid JSONL records followed by an invalid UTF-8 byte sequence** (to exercise the partial-population path); call `append_dialogue_audit_event_once(...)` with a valid event; assert the corrupt file was renamed to a `events.corrupt-<utc-ts>.jsonl` sibling; assert the audit append succeeded against a fresh `events.jsonl` containing exactly one record; assert `_audit_seen_initialized == True` and `_audit_seen` contains exactly the newly-appended key (not any pre-quarantine ghost, and not any key from the valid records that preceded the bad byte). Pins F1 (round-6) + round-8 partial-population fix: runtime path shares the same quarantine policy as startup, closing the failure-class boundary that would otherwise leak `UnicodeDecodeError` into `dialogue._finalize_confirmed_turn`.
+- `test_ensure_outcomes_seen_loaded_quarantines_on_invalid_utf8` — mirror for outcomes, using `append_dialogue_outcome_once`. Same partial-population coverage: valid records before the bad byte must not leave ghost keys in either `_dialogue_outcomes_seen` or `_delegation_outcomes_seen`.
 - `test_append_after_quarantine_reappends_once_then_resumes_dedup` — quarantine `events.jsonl` via the runtime path with a record `R` present only in the corrupt file (so `R` is unrecoverable from disk); call `append_dialogue_audit_event_once(R)` twice; assert the first call writes a record (single accepted duplicate vs the quarantined ghost — the in-memory seen-set was emptied by quarantine and the pre-quarantine seen state was lost with the file); assert the second call hits the now-populated seen-set and is skipped (no second disk write). Pins F1 (round-6) explicit trade-off and the §2 contract phrasing "may be re-appended once": exactly one duplicate accepted post-quarantine, then normal dedup behavior resumes — corrupt diagnostic data does not block live workflow finalization, AND the post-quarantine re-append does not permanently disable `_once` semantics.
 
 ### 8.8 Dedup-set update invariant
@@ -895,6 +902,7 @@ uv run ruff check .                                             # no lint regres
 rg "_jsonl_contains" server/ scripts/                           # zero hits in production code
 rg "_seen_sets_initialized" server/ scripts/                    # zero hits — the unified flag was split into per-file flags
 rg "except \(OSError, UnicodeDecodeError\)" scripts/            # zero hits — round-6 narrowed the bootstrap catch to OSError only
+rg 'newline="\\n"' server/journal.py                           # expected hits: 1 prune temp-file + N append writers — spot-check each site opens with newline="\n"
 ```
 
 The `_quarantine_corrupt_jsonl` helper (round-6 F1) must be called from exactly four sites in `server/journal.py`: two from `prune_audit_logs` (audit and outcomes try/except blocks) and one each from `_ensure_audit_seen_loaded` and `_ensure_outcomes_seen_loaded`. A `rg "_quarantine_corrupt_jsonl" server/journal.py` returning fewer than 5 matches (1 def + 4 call sites) means the failure-class-boundary closure did not land everywhere. Spot-check by reading the four call sites for the `except UnicodeDecodeError` catch.
@@ -917,3 +925,5 @@ Per the verification-before-completion discipline, the implementation plan must 
 - **Audit-log fsync, hash chain, HMAC** — F12's other sub-recommendations. Not in this slice. The audit log remains "best-effort append".
 
 - **Outcome-record retention policy** — this slice applies the 30-day TTL to `outcomes.jsonl` because F4 explicitly names both files as having the unbounded-growth problem. If long-term analytics ever become a goal, a separate retention class for outcomes can be added without touching audit log semantics.
+
+- **Operator disposition for forensic files and TTL-exempt records** — this slice provides observability (WARNING-level bootstrap summary for nonzero `retained_malformed` counts and quarantine events) but does not define a disposition workflow. Future scope should address: (a) inspection, archival, or cleanup of `*.corrupt-*` quarantine files; (b) a retention ceiling or manual purge path for indefinitely-accumulating TTL-exempt malformed records. Both are bounded by operator attention to the WARNING signal until a dedicated management surface exists.
