@@ -794,6 +794,193 @@ def test_ensure_outcomes_seen_loaded_does_not_mark_initialized_on_failure(
     assert journal._outcomes_seen_initialized is True
 
 
+class TestAuditRetentionQuarantine:
+    def test_prune_audit_logs_quarantines_audit_on_invalid_utf8(
+        self, tmp_path: Path
+    ) -> None:
+        now = datetime(2026, 5, 12, 19, 37, 15, tzinfo=UTC)
+        journal = OperationJournal(tmp_path / "plugin-data", clock=_fixed_clock(now))
+        audit_path = tmp_path / "plugin-data" / "audit" / "events.jsonl"
+        audit_path.write_bytes(
+            (
+                '{"event_id":"pre-corrupt","timestamp":"2026-05-01T00:00:00Z",'
+                '"actor":"claude","action":"dialogue_turn",'
+                '"collaboration_id":"collab-1","runtime_id":"rt-1",'
+                '"turn_id":"turn-1"}\n'
+            ).encode("utf-8")
+            + b"\x80abc\n"
+        )
+
+        summary = journal.prune_audit_logs()
+
+        quarantine_path = audit_path.with_name(
+            "events.corrupt-20260512T193715Z.jsonl"
+        )
+        assert not audit_path.exists()
+        assert quarantine_path.read_bytes().endswith(b"\x80abc\n")
+        assert summary.audit_quarantined_to == quarantine_path
+        assert journal._audit_seen == set()
+        assert journal._audit_seen_initialized is True
+
+    def test_prune_audit_logs_quarantines_only_affected_file(
+        self, tmp_path: Path
+    ) -> None:
+        now = datetime(2026, 5, 12, 19, 37, 15, tzinfo=UTC)
+        journal = OperationJournal(tmp_path / "plugin-data", clock=_fixed_clock(now))
+        audit_path = tmp_path / "plugin-data" / "audit" / "events.jsonl"
+        outcomes_path = tmp_path / "plugin-data" / "analytics" / "outcomes.jsonl"
+        audit_path.write_bytes(b"\x80abc\n")
+        journal.append_outcome(_dialogue_outcome(outcome_id="kept"))
+
+        summary = journal.prune_audit_logs()
+
+        assert summary.audit_quarantined_to is not None
+        assert summary.outcomes_quarantined_to is None
+        assert [record["outcome_id"] for record in _read_jsonl(outcomes_path)] == [
+            "kept"
+        ]
+
+    def test_quarantine_uses_deterministic_suffix_on_target_collision(
+        self, tmp_path: Path
+    ) -> None:
+        now = datetime(2026, 5, 12, 19, 37, 15, tzinfo=UTC)
+        journal = OperationJournal(tmp_path / "plugin-data", clock=_fixed_clock(now))
+        audit_path = tmp_path / "plugin-data" / "audit" / "events.jsonl"
+        first_collision = audit_path.with_name("events.corrupt-20260512T193715Z.jsonl")
+        second_collision = audit_path.with_name(
+            "events.corrupt-20260512T193715Z.1.jsonl"
+        )
+        first_collision.write_text("occupied\n", encoding="utf-8")
+        second_collision.write_text("occupied\n", encoding="utf-8")
+        audit_path.write_bytes(b"\x80abc\n")
+
+        summary = journal.prune_audit_logs()
+
+        assert summary.audit_quarantined_to == audit_path.with_name(
+            "events.corrupt-20260512T193715Z.2.jsonl"
+        )
+
+    def test_quarantine_rename_oserror_propagates_as_oserror(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        now = datetime(2026, 5, 12, 19, 37, 15, tzinfo=UTC)
+        journal = OperationJournal(tmp_path / "plugin-data", clock=_fixed_clock(now))
+        audit_path = tmp_path / "plugin-data" / "audit" / "events.jsonl"
+        audit_path.write_bytes(b"\x80abc\n")
+
+        def fail_rename(self: Path, target: Path) -> Path:
+            raise OSError("rename failed")
+
+        monkeypatch.setattr(Path, "rename", fail_rename)
+
+        with pytest.raises(OSError, match="rename failed"):
+            journal.prune_audit_logs()
+
+    def test_prune_audit_logs_quarantines_outcomes_on_invalid_utf8(
+        self, tmp_path: Path
+    ) -> None:
+        now = datetime(2026, 5, 12, 19, 37, 15, tzinfo=UTC)
+        journal = OperationJournal(tmp_path / "plugin-data", clock=_fixed_clock(now))
+        outcomes_path = tmp_path / "plugin-data" / "analytics" / "outcomes.jsonl"
+        outcomes_path.write_bytes(
+            (
+                '{"outcome_id":"pre-corrupt","timestamp":"2026-05-01T00:00:00Z",'
+                '"outcome_type":"dialogue_turn","collaboration_id":"collab-1",'
+                '"runtime_id":"rt-1","context_size":1024,"turn_id":"turn-1",'
+                '"turn_sequence":1}\n'
+            ).encode("utf-8")
+            + b"\x80abc\n"
+        )
+
+        summary = journal.prune_audit_logs()
+
+        quarantine_path = outcomes_path.with_name(
+            "outcomes.corrupt-20260512T193715Z.jsonl"
+        )
+        assert not outcomes_path.exists()
+        assert quarantine_path.read_bytes().endswith(b"\x80abc\n")
+        assert summary.outcomes_quarantined_to == quarantine_path
+        assert summary.audit_quarantined_to is None
+        assert journal._dialogue_outcomes_seen == set()
+        assert journal._delegation_outcomes_seen == set()
+        assert journal._outcomes_seen_initialized is True
+
+
+def test_ensure_audit_seen_loaded_quarantines_on_invalid_utf8(
+    tmp_path: Path,
+) -> None:
+    now = datetime(2026, 5, 12, 19, 37, 15, tzinfo=UTC)
+    journal = OperationJournal(tmp_path / "plugin-data", clock=_fixed_clock(now))
+    audit_path = tmp_path / "plugin-data" / "audit" / "events.jsonl"
+    audit_path.write_bytes(
+        (
+            '{"event_id":"ghost","timestamp":"2026-05-01T00:00:00Z",'
+            '"actor":"claude","action":"dialogue_turn",'
+            '"collaboration_id":"collab-1","runtime_id":"rt-1",'
+            '"turn_id":"turn-1"}\n'
+        ).encode("utf-8")
+        + b"\x80abc\n"
+    )
+
+    journal.append_dialogue_audit_event_once(_audit_event(event_id="fresh"))
+
+    quarantine_path = audit_path.with_name("events.corrupt-20260512T193715Z.jsonl")
+    assert quarantine_path.exists()
+    assert [record["event_id"] for record in _read_jsonl(audit_path)] == ["fresh"]
+    assert journal._audit_seen == {("dialogue_turn", "collab-1", "turn-1")}
+
+
+def test_ensure_outcomes_seen_loaded_quarantines_on_invalid_utf8(
+    tmp_path: Path,
+) -> None:
+    now = datetime(2026, 5, 12, 19, 37, 15, tzinfo=UTC)
+    journal = OperationJournal(tmp_path / "plugin-data", clock=_fixed_clock(now))
+    outcomes_path = tmp_path / "plugin-data" / "analytics" / "outcomes.jsonl"
+    outcomes_path.write_bytes(
+        (
+            '{"outcome_id":"ghost","timestamp":"2026-05-01T00:00:00Z",'
+            '"outcome_type":"dialogue_turn","collaboration_id":"collab-1",'
+            '"runtime_id":"rt-1","context_size":1024,"turn_id":"turn-1"}\n'
+        ).encode("utf-8")
+        + b"\x80abc\n"
+    )
+
+    journal.append_dialogue_outcome_once(_dialogue_outcome(outcome_id="fresh"))
+
+    quarantine_path = outcomes_path.with_name(
+        "outcomes.corrupt-20260512T193715Z.jsonl"
+    )
+    assert quarantine_path.exists()
+    assert [record["outcome_id"] for record in _read_jsonl(outcomes_path)] == ["fresh"]
+    assert journal._dialogue_outcomes_seen == {
+        ("dialogue_turn", "collab-1", "turn-1")
+    }
+    assert journal._delegation_outcomes_seen == set()
+
+
+def test_append_after_quarantine_reappends_once_then_resumes_dedup(
+    tmp_path: Path,
+) -> None:
+    now = datetime(2026, 5, 12, 19, 37, 15, tzinfo=UTC)
+    journal = OperationJournal(tmp_path / "plugin-data", clock=_fixed_clock(now))
+    audit_path = tmp_path / "plugin-data" / "audit" / "events.jsonl"
+    audit_path.write_bytes(
+        (
+            '{"event_id":"ghost","timestamp":"2026-05-01T00:00:00Z",'
+            '"actor":"claude","action":"dialogue_turn",'
+            '"collaboration_id":"collab-1","runtime_id":"rt-1",'
+            '"turn_id":"turn-1"}\n'
+        ).encode("utf-8")
+        + b"\x80abc\n"
+    )
+    event = _audit_event(event_id="fresh")
+
+    journal.append_dialogue_audit_event_once(event)
+    journal.append_dialogue_audit_event_once(_audit_event(event_id="fresh-second"))
+
+    assert [record["event_id"] for record in _read_jsonl(audit_path)] == ["fresh"]
+
+
 class TestPhasedJournal:
     def test_write_intent_and_list_unresolved(self, tmp_path: Path) -> None:
         journal = OperationJournal(tmp_path / "plugin-data")
