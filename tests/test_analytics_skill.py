@@ -316,3 +316,25 @@ class TestAnalyticsRecipe:
         )
         assert result.returncode == 0, f"Script failed:\n{result.stderr}"
         assert "(2 retention-window records, 1 malformed)" in result.stdout
+
+    def test_non_dict_valid_json_counted_as_malformed(self, tmp_path: Path) -> None:
+        outcomes = tmp_path / "outcomes.jsonl"
+        outcomes.write_text(
+            '{"outcome_type": "consult", "outcome_id": "o1", "timestamp": "t",'
+            ' "collaboration_id": "c1", "runtime_id": "r1", "context_size": 100,'
+            ' "turn_id": "t1"}\n'
+            "[1, 2, 3]\n"
+            "42\n"
+            '"a string"\n'
+            "null\n"
+        )
+        audit = tmp_path / "audit.jsonl"
+        audit.write_text("")
+        result = subprocess.run(
+            ["python3", str(ANALYTICS_SCRIPT), str(outcomes), str(audit)],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert result.returncode == 0, f"Script failed:\n{result.stderr}"
+        assert "(1 retention-window records, 4 malformed)" in result.stdout
