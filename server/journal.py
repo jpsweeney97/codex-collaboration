@@ -6,7 +6,7 @@ import json
 import logging
 import os
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from typing import Any, Callable
@@ -108,6 +108,53 @@ def _coerce_aware_utc(value: datetime, *, source: str) -> datetime:
     if value.tzinfo is None or value.tzinfo.utcoffset(value) is None:
         raise ValueError(f"{source} requires a timezone-aware datetime. Got: {value!r}")
     return value.astimezone(UTC)
+
+
+def _parse_aware_iso8601(value: Any) -> datetime | None:
+    """Return a timezone-aware UTC datetime, or None on any failure."""
+
+    if not isinstance(value, str):
+        return None
+    try:
+        timestamp = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if timestamp.tzinfo is None or timestamp.tzinfo.utcoffset(timestamp) is None:
+        return None
+    return timestamp.astimezone(UTC)
+
+
+def _populate_from_audit_record(
+    record: dict[str, Any],
+    audit_seen: set[_AuditDedupKey],
+) -> None:
+    action = record.get("action")
+    collaboration_id = record.get("collaboration_id")
+    if not isinstance(action, str) or not isinstance(collaboration_id, str):
+        return
+    turn_id = record.get("turn_id")
+    if turn_id is not None and not isinstance(turn_id, str):
+        return
+    audit_seen.add((action, collaboration_id, turn_id))
+
+
+def _populate_from_outcome_record(
+    record: dict[str, Any],
+    dialogue_seen: set[_DialogueOutcomeDedupKey],
+    delegation_seen: set[_DelegationOutcomeDedupKey],
+) -> None:
+    outcome_type = record.get("outcome_type")
+    if not isinstance(outcome_type, str):
+        return
+    if outcome_type == "delegation_terminal":
+        job_id = record.get("job_id")
+        if isinstance(job_id, str):
+            delegation_seen.add((outcome_type, job_id))
+        return
+    collaboration_id = record.get("collaboration_id")
+    turn_id = record.get("turn_id")
+    if isinstance(collaboration_id, str) and isinstance(turn_id, str):
+        dialogue_seen.add((outcome_type, collaboration_id, turn_id))
 
 
 def _journal_callback(
@@ -338,7 +385,7 @@ class OperationJournal:
     def append_audit_event(self, event: AuditEvent) -> None:
         """Append an audit event as JSONL."""
 
-        with self._audit_path.open("a", encoding="utf-8") as handle:
+        with self._audit_path.open("a", encoding="utf-8", newline="\n") as handle:
             handle.write(json.dumps(asdict(event), sort_keys=True) + "\n")
 
     def append_dialogue_audit_event_once(self, event: AuditEvent) -> None:
@@ -358,7 +405,7 @@ class OperationJournal:
     def append_outcome(self, record: OutcomeRecord) -> None:
         """Append an analytics outcome record as JSONL."""
 
-        with self._outcomes_path.open("a", encoding="utf-8") as handle:
+        with self._outcomes_path.open("a", encoding="utf-8", newline="\n") as handle:
             handle.write(json.dumps(asdict(record), sort_keys=True) + "\n")
 
     def append_dialogue_outcome_once(self, record: OutcomeRecord) -> None:
@@ -378,7 +425,7 @@ class OperationJournal:
     def append_delegation_outcome(self, record: DelegationOutcomeRecord) -> None:
         """Append a delegation terminal outcome record as JSONL."""
 
-        with self._outcomes_path.open("a", encoding="utf-8") as handle:
+        with self._outcomes_path.open("a", encoding="utf-8", newline="\n") as handle:
             handle.write(json.dumps(asdict(record), sort_keys=True) + "\n")
 
     def append_delegation_outcome_once(self, record: DelegationOutcomeRecord) -> None:
@@ -455,8 +502,107 @@ class OperationJournal:
         return self._journal_dir / "operations" / f"{session_id}.jsonl"
 
     def prune_audit_logs(self) -> PruneSummary:
-        self._now()
-        return PruneSummary(0, 0, 0, 0, 0, 0)
+        now = self._now()
+        cutoff = now - timedelta(days=_AUDIT_TTL_DAYS)
+
+        self._audit_seen_initialized = False
+        self._outcomes_seen_initialized = False
+
+        new_audit_seen: set[_AuditDedupKey] = set()
+        new_dialogue_outcomes_seen: set[_DialogueOutcomeDedupKey] = set()
+        new_delegation_outcomes_seen: set[_DelegationOutcomeDedupKey] = set()
+
+        audit_stats = self._prune_jsonl_pass(
+            path=self._audit_path,
+            cutoff=cutoff,
+            populate=lambda record: _populate_from_audit_record(record, new_audit_seen),
+        )
+        self._audit_seen = new_audit_seen
+        self._audit_seen_initialized = True
+
+        outcomes_stats = self._prune_jsonl_pass(
+            path=self._outcomes_path,
+            cutoff=cutoff,
+            populate=lambda record: _populate_from_outcome_record(
+                record,
+                new_dialogue_outcomes_seen,
+                new_delegation_outcomes_seen,
+            ),
+        )
+        self._dialogue_outcomes_seen = new_dialogue_outcomes_seen
+        self._delegation_outcomes_seen = new_delegation_outcomes_seen
+        self._outcomes_seen_initialized = True
+
+        return PruneSummary(
+            audit_retained=audit_stats.retained,
+            audit_dropped=audit_stats.dropped,
+            audit_retained_malformed=audit_stats.retained_malformed,
+            outcomes_retained=outcomes_stats.retained,
+            outcomes_dropped=outcomes_stats.dropped,
+            outcomes_retained_malformed=outcomes_stats.retained_malformed,
+        )
+
+    def _prune_jsonl_pass(
+        self,
+        *,
+        path: Path,
+        cutoff: datetime,
+        populate: Callable[[dict[str, Any]], None],
+    ) -> _PruneFileStats:
+        if not path.exists():
+            return _PruneFileStats(0, 0, 0)
+
+        retained_lines: list[str] = []
+        retained_count = 0
+        dropped_count = 0
+        retained_malformed_count = 0
+
+        with path.open(encoding="utf-8") as handle:
+            for raw_line in handle:
+                stripped = raw_line.strip()
+                if not stripped:
+                    continue
+
+                line_to_keep = raw_line if raw_line.endswith("\n") else raw_line + "\n"
+
+                try:
+                    record = json.loads(stripped)
+                except json.JSONDecodeError:
+                    retained_count += 1
+                    retained_malformed_count += 1
+                    retained_lines.append(line_to_keep)
+                    continue
+
+                if not isinstance(record, dict):
+                    retained_count += 1
+                    retained_malformed_count += 1
+                    retained_lines.append(line_to_keep)
+                    continue
+
+                timestamp = _parse_aware_iso8601(record.get("timestamp"))
+                if timestamp is None:
+                    retained_count += 1
+                    retained_malformed_count += 1
+                    retained_lines.append(line_to_keep)
+                    populate(record)
+                    continue
+
+                if timestamp < cutoff:
+                    dropped_count += 1
+                    continue
+
+                retained_count += 1
+                retained_lines.append(line_to_keep)
+                populate(record)
+
+        tmp_path = path.with_suffix(path.suffix + ".tmp")
+        with tmp_path.open("w", encoding="utf-8", newline="\n") as handle:
+            handle.writelines(retained_lines)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, path)
+
+        return _PruneFileStats(retained_count, dropped_count, retained_malformed_count)
 
     @staticmethod
     def _jsonl_contains(
