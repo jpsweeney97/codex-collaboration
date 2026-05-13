@@ -179,7 +179,57 @@ class TestAnalyticsRecipe:
         assert "## Data Sources" in output
         assert "outcomes.jsonl" in output
         assert "events.jsonl" in output
-        assert "10 records" in output  # total outcome records (also matches audit)
+        assert "10 retention-window records" in output  # total outcome records
+        assert "retention-window records" in output
+        assert "observed timestamp range" in output
+
+    def test_data_header_reports_observed_timestamp_ranges(
+        self, tmp_path: Path
+    ) -> None:
+        output = _run_analytics(tmp_path)
+        assert "Outcomes observed timestamp range:" in output
+        assert "2026-01-01T00:00:00Z" in output
+        assert "2026-04-21T00:00:00Z" in output
+        assert "Audit observed timestamp range:" in output
+
+    def test_data_header_excludes_malformed_timestamps_from_range(
+        self, tmp_path: Path
+    ) -> None:
+        outcomes_path = tmp_path / "outcomes.jsonl"
+        audit_path = tmp_path / "events.jsonl"
+        outcomes_path.write_text(
+            '{"outcome_type": "consult", "timestamp": "2026-04-01T00:00:00Z"}\n'
+            '{"outcome_type": "consult", "timestamp": "not-a-date"}\n'
+            '{"outcome_type": "consult", "timestamp": "2026-04-01T00:00:00"}\n'
+        )
+        audit_path.write_text(
+            '{"action": "consult", "timestamp": "2026-05-02T12:30:00Z"}\n'
+            '{"action": "consult", "timestamp": "bad-audit-date"}\n'
+            '{"action": "consult", "timestamp": "2026-05-02T12:30:00"}\n'
+        )
+        result = subprocess.run(
+            ["python3", str(ANALYTICS_SCRIPT), str(outcomes_path), str(audit_path)],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert result.returncode == 0, f"Script failed:\n{result.stderr}"
+        assert "2026-04-01T00:00:00Z" in result.stdout
+        assert "2026-05-02T12:30:00Z" in result.stdout
+        assert "not-a-date" not in result.stdout
+        assert "bad-audit-date" not in result.stdout
+        assert "2026-04-01T00:00:00 " not in result.stdout
+        assert "2026-05-02T12:30:00 " not in result.stdout
+        assert (
+            "- Outcomes observed timestamp range: "
+            "2026-04-01T00:00:00Z to 2026-04-01T00:00:00Z "
+            "(2 records with missing or malformed timestamps)"
+        ) in result.stdout
+        assert (
+            "- Audit observed timestamp range: "
+            "2026-05-02T12:30:00Z to 2026-05-02T12:30:00Z "
+            "(2 records with missing or malformed timestamps)"
+        ) in result.stdout
 
     def test_usage_view_counts(self, tmp_path: Path) -> None:
         output = _run_analytics(tmp_path)
@@ -243,7 +293,7 @@ class TestAnalyticsRecipe:
             timeout=10,
         )
         assert result.returncode == 0, f"Script failed:\n{result.stderr}"
-        assert "(0 records)" in result.stdout
+        assert "(0 retention-window records)" in result.stdout
 
     def test_malformed_lines_are_skipped_and_counted(self, tmp_path: Path) -> None:
         outcomes = tmp_path / "outcomes.jsonl"
@@ -265,4 +315,4 @@ class TestAnalyticsRecipe:
             timeout=10,
         )
         assert result.returncode == 0, f"Script failed:\n{result.stderr}"
-        assert "(2 records, 1 malformed)" in result.stdout
+        assert "(2 retention-window records, 1 malformed)" in result.stdout

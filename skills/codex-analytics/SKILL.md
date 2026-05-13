@@ -16,7 +16,7 @@ Call `codex.status` with the current `repo_root` to get `plugin_data_path`. The 
 - `{plugin_data_path}/analytics/outcomes.jsonl` — advisory and delegation terminal outcomes
 - `{plugin_data_path}/audit/events.jsonl` — trust boundary, lifecycle, and security events
 
-Both are append-only JSONL. Use the analytics script (see below) for aggregation, or `Read` for ad-hoc inspection of small files.
+Both are startup-pruned operational JSONL streams with a 30-day retention horizon after F4. Use the analytics script (see below) for retention-window aggregation, or `Read` for ad-hoc inspection of small live files. Forensic `*.corrupt-*` siblings may exist after UTF-8 quarantine; do not treat them as live analytics inputs unless the user explicitly asks for forensic inspection.
 
 ## Outcome Record Shapes
 
@@ -123,3 +123,5 @@ The recipe outputs these as `unavailable (not emitted to audit stream)` rather t
 ## Output Format
 
 Present each view as a markdown table. Group views under `##` headers. Include the data file paths and total record counts at the top for transparency.
+
+Counts are retention-window counts, not all-time totals. Include the observed timestamp range from each live input file in the data-source header so the user can see the covered window. Only records with timezone-aware ISO 8601 timestamps participate in the range; records with missing, non-string, unparseable, or timezone-naive timestamps are surfaced separately as a missing/malformed count alongside each range so the user sees both the parseable window and how many records were excluded from it.

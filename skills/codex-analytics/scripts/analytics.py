@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import sys
 from collections import Counter
+from datetime import UTC, datetime
 from pathlib import Path
 
 
@@ -25,6 +26,34 @@ def _read_jsonl(path: Path) -> tuple[list[dict[str, object]], int]:
         except json.JSONDecodeError:
             malformed += 1
     return records, malformed
+
+
+def _timestamp_range(records: list[dict[str, object]]) -> tuple[str, int]:
+    """Return (range_string, missing_or_malformed_count)."""
+    parseable: list[datetime] = []
+    missing_or_malformed = 0
+    for record in records:
+        value = record.get("timestamp")
+        if not isinstance(value, str):
+            missing_or_malformed += 1
+            continue
+        try:
+            ts = datetime.fromisoformat(value)
+        except ValueError:
+            missing_or_malformed += 1
+            continue
+        if ts.tzinfo is None or ts.tzinfo.utcoffset(ts) is None:
+            missing_or_malformed += 1
+            continue
+        parseable.append(ts.astimezone(UTC))
+
+    if not parseable:
+        return "n/a", missing_or_malformed
+
+    parseable.sort()
+    earliest = parseable[0].isoformat().replace("+00:00", "Z")
+    latest = parseable[-1].isoformat().replace("+00:00", "Z")
+    return f"{earliest} to {latest}", missing_or_malformed
 
 
 def main(outcomes_path: Path, audit_path: Path) -> None:
@@ -83,10 +112,24 @@ def main(outcomes_path: Path, audit_path: Path) -> None:
     print("## Data Sources")
     outcomes_note = f", {outcomes_malformed} malformed" if outcomes_malformed else ""
     audit_note = f", {audit_malformed} malformed" if audit_malformed else ""
+    outcomes_range, outcomes_missing = _timestamp_range(outcome_records)
+    audit_range, audit_missing = _timestamp_range(audit_records)
     print(
-        f"- Outcomes: `{outcomes_path}` ({total_outcome_records} records{outcomes_note})"
+        f"- Outcomes: `{outcomes_path}` "
+        f"({total_outcome_records} retention-window records{outcomes_note})"
     )
-    print(f"- Audit: `{audit_path}` ({total_audit_records} records{audit_note})")
+    print(
+        f"- Audit: `{audit_path}` "
+        f"({total_audit_records} retention-window records{audit_note})"
+    )
+    print(
+        f"- Outcomes observed timestamp range: {outcomes_range} "
+        f"({outcomes_missing} records with missing or malformed timestamps)"
+    )
+    print(
+        f"- Audit observed timestamp range: {audit_range} "
+        f"({audit_missing} records with missing or malformed timestamps)"
+    )
 
     print("\n## Usage")
     print("| Metric | Count |")
