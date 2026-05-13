@@ -28,13 +28,15 @@ After this slice lands, the following hold:
 - Records that fail to parse as JSON, or parse as non-dict shapes, are retained as raw lines.
 - Blank lines are removed during pruning (not records; not subject to retain-on-uncertainty).
 - The three `append_*_once` methods consult an in-memory dedup set keyed on natural fields. Set membership replaces the previous linear file scan. Sets are atomically rebuilt during prune and atomically loaded on first direct-construction use.
-- A clock seam (`OperationJournal(..., clock=Callable[[], datetime])`) governs every "now" the journal uses. Naive clock outputs fail fast with `ValueError`. Production code does not pass concrete `now=` values; tests inject fake clocks.
+- A clock seam (`OperationJournal(..., clock=Callable[[], datetime])`) is the journal's only source of "now". Naive clock outputs fail fast with `ValueError`. Tests inject fake clocks at the constructor seam (per the leaf-seam principle — no method-level clock override exists or is intended).
 - Atomic file replacement guarantees: target file untouched on pre-replace failure; POSIX-atomic swap on `os.replace` success. Does *not* directory-fsync — post-rename durability across power-fail is not asserted, matching the existing `compact()` and `_write_markers` pattern.
 - **Atomicity is per file, not pair-wise.** A successful prune of `events.jsonl` followed by a failed prune of `outcomes.jsonl` leaves the canonical files in a mixed-prune state. Both files are independent retention surfaces; the next startup re-runs the full prune. **Seen-set loading is per source file**, not journal-wide: `_ensure_audit_seen_loaded()` depends only on `events.jsonl` readability, and `_ensure_outcomes_seen_loaded()` depends only on `outcomes.jsonl` readability. After a partial-failure prune, each `append_*_once` reloads only its own file's seen-set from disk. Audit appends do not share fate with outcomes appends, and vice versa.
 - **File-level encoding is UTF-8 by construction.** An invalid UTF-8 byte sequence in `events.jsonl` or `outcomes.jsonl` is treated as **file-level corruption with automatic quarantine**. Both `prune_audit_logs` (startup) and `_ensure_*_seen_loaded` (runtime append-once paths) catch `UnicodeDecodeError` per file and invoke the shared `_quarantine_corrupt_jsonl` helper (§5.2c), which renames the affected file to a sibling `<stem>.corrupt-<utc-ts><suffix>` (with deterministic `.1`, `.2`, ... numeric suffix on existing-target collision), logs at `WARNING` with both paths plus the reason exception, and returns the quarantine path. The relevant in-memory seen-set(s) become empty and that file's initialized flag is set to `True`; the next `append_*` call writes a fresh JSONL record into a newly-created file. This is *not* retain-on-uncertainty (which applies at JSONL-record granularity, not byte granularity), but it shares the principle that corrupt content is preserved on disk under a forensic name rather than silently erased. JSONL-line-level `json.JSONDecodeError` is *not* in the quarantine class because malformed records are line-local retained data, not byte-level corruption.
-- **Quarantine duplicate-record trade-off.** After a file is quarantined, any records that existed *only* in the quarantined file are no longer represented in the in-memory seen-set. A subsequent `append_*_once` call carrying a logical record that matched a quarantined-file record will succeed (not deduped). This is an explicit accepted trade-off: corrupt diagnostic data does not block live workflow finalization, and the quarantined file remains available for forensic inspection.
-- **Single-writer assumption.** Exactly one MCP process owns a given `plugin_data_path` at a time. Concurrent prune from two processes against the same data directory is undefined and unsupported — the fixed-suffix temp file `<path>.tmp` would collide. This matches the existing `compact()` and `_write_markers` patterns in `OperationJournal`.
+- **Quarantine duplicate-record trade-off.** After a file is quarantined, any records that existed *only* in the quarantined file are no longer represented in the in-memory seen-set. A subsequent `append_*_once` call carrying a logical record that matched a quarantined-file record will succeed (not deduped). The same `append_*_once` call repeated a second time is deduped — only a single duplicate is accepted post-quarantine; normal `_once` semantics resume immediately after. This is an explicit accepted trade-off: corrupt diagnostic data does not block live workflow finalization, and the quarantined file remains available for forensic inspection.
+- **Malformed-record TTL-exempt accumulation trade-off.** F4 bounds growth for *valid timestamped records only* — records with parseable, timezone-aware `timestamp` fields. Records with missing, non-string, unparseable, or timezone-naive timestamps are TTL-exempt per retain-on-uncertainty (see bullet above), so an indefinitely-accumulating malformed-record path remains. This accumulation is observable per pass via `PruneSummary.audit_retained_malformed` and `PruneSummary.outcomes_retained_malformed`, and the bootstrap summary escalates to `WARNING` when either count is nonzero (§6.1). The only long-term bound on this accumulation is operator intervention triggered by that signal. This is an explicit accepted trade-off: the alternative — auto-erasing records the journal can't parse — violates retain-on-uncertainty and risks losing forensic evidence of upstream emitter bugs.
+- **Single-writer operating envelope.** The single-writer assumption applies to the prune writer for `audit/events.jsonl` and `analytics/outcomes.jsonl` — the MCP server process that runs `prune_audit_logs()` at startup. Under the supported Claude Code launch model, exactly one stdio MCP server child runs per Claude Code session; this slice's prune writer is that child. Plugin hooks may run as separate processes, but they are not prune writers for these files. The unsupported case is two MCP server processes whose `plugin_data_path` resolves to the same `${CLAUDE_PLUGIN_DATA}` root — most commonly two Claude Code sessions sharing a plugin install, but any path-aliasing route (bind mount, symlink, shared host directory) produces the same condition. In that case, two prune passes against the same `<path>.tmp` collide and outcomes are undefined. A startup file lock is the obvious mitigation but is out of scope for this slice; this matches the repo's current no-lock rewrite pattern (see `compact()` and `_write_markers`) rather than relying on it as a safety argument.
 - The plugin bootstrap invokes pruning. Prune failure (`OSError` only — `UnicodeDecodeError` is now handled inside `prune_audit_logs` via quarantine) invokes `logger.warning(..., exc_info=True)` and does not block startup. **Warning-level output reaches stderr via Python's `logging.lastResort` handler (the unconfigured-logger fallback), so the failure signal is observable to whoever sees the MCP server's stderr unless the host suppresses it.** The success-summary call is at `INFO` (discarded by Python's default logging configuration) **when both `retained_malformed` counts are zero AND no file was quarantined**, and is **escalated to `WARNING` when any of those is nonzero / non-None** — so the silent-accumulation case AND the quarantine case both have default operator visibility before F18 lands. Quarantine itself fires a `WARNING` from inside `_quarantine_corrupt_jsonl` at the moment of rename; the bootstrap summary `WARNING` ties the per-file event to the run-level summary for log correlation. Routine success metrics still require F18 (or `caplog` in tests). Append correctness is preserved through `_ensure_audit_seen_loaded()` / `_ensure_outcomes_seen_loaded()` regardless of logging state.
+- **Reader classification.** After F4 lands, the `${CLAUDE_PLUGIN_DATA}/audit/` and `${CLAUDE_PLUGIN_DATA}/analytics/` directories hold three classes of artifact, each with a distinct reader contract: (a) **live valid records** in `events.jsonl` / `outcomes.jsonl` — subject to the 30-day TTL, the active retention surface; (b) **live malformed retained records** colocated in the same files — TTL-exempt, observed per-pass via `PruneSummary.*_retained_malformed`, accumulation bounded only by operator intervention (see the malformed-record trade-off above); (c) **forensic quarantined files** matching `*.corrupt-*` — inspection inputs only, not active read or retention sources. Future readers (F18 metrics, F19 config inventory, any new analytics or summarization slice) must target classes (a)+(b) by exact-name reads on `events.jsonl` / `outcomes.jsonl` and must explicitly exclude or separately classify class (c). Globbing either directory and treating all `*.jsonl` matches as live is a domain-level mistake; the `.jsonl` suffix is preserved on quarantined files for human inspection tooling, not for automated reader inclusion.
 
 ## 3. Scope
 
@@ -144,7 +146,7 @@ def timestamp(self) -> str:
         self._now().replace(microsecond=0).isoformat().replace("+00:00", "Z")
     )
 
-def prune_audit_logs(self, now: datetime | None = None) -> PruneSummary:
+def prune_audit_logs(self) -> PruneSummary:
     """Single-pass prune for events.jsonl and outcomes.jsonl.
 
     For each file: drop records older than _AUDIT_TTL_DAYS; rewrite the
@@ -192,7 +194,7 @@ Same shape for `append_dialogue_outcome_once` and `append_delegation_outcome_onc
 
 ### 5.1 Clock seam
 
-The journal's only source of "now" is `self._clock()`. Both `timestamp()` and `prune_audit_logs(now=None)` flow through `_now()`, which calls `_coerce_aware_utc` to fail-fast on naive clocks. Explicit `now=` arguments to `prune_audit_logs` flow through the same helper, ensuring identical validation semantics on both paths.
+The journal's only source of "now" is `self._clock()`. Both `timestamp()` and `prune_audit_logs()` flow through `_now()`, which calls `_coerce_aware_utc` to fail-fast on naive clocks. There is no method-level clock override — tests fake the clock at the constructor seam only (see §6.4 fixture pattern for the mutable-clock pattern that covers time-advance scenarios).
 
 ### 5.2 Pruning pass
 
@@ -272,12 +274,8 @@ def _prune_jsonl_pass(
 `prune_audit_logs` orchestrates:
 
 ```python
-def prune_audit_logs(self, now: datetime | None = None) -> PruneSummary:
-    now = (
-        self._now()
-        if now is None
-        else _coerce_aware_utc(now, source="prune_audit_logs(now=...)")
-    )
+def prune_audit_logs(self) -> PruneSummary:
+    now = self._now()
     cutoff = now - timedelta(days=_AUDIT_TTL_DAYS)
 
     # Invalidate BOTH per-file flags before any disk mutation. Each is
@@ -709,7 +707,7 @@ Without `logging.basicConfig` (which F18 will provide), Python's logging default
 ### 6.3 Re-runnable prune
 
 `prune_audit_logs()` is safe to call multiple times. Each invocation:
-- Recomputes `cutoff` from the current `_now()` (or explicit `now=`).
+- Recomputes `cutoff` from the current `_now()`.
 - Clears **both** `_audit_seen_initialized = False` and `_outcomes_seen_initialized = False` before any disk mutation (per-file invalidate-before-disk-mutation discipline — see §5.6).
 - Rebuilds the per-file seen-sets from scratch in two passes (one per file).
 - Restores each per-file flag to `True` **independently**, immediately after its file's seen-set is atomically reassigned. The audit flag is restored after the audit pass; the outcomes flag is restored after the outcomes pass.
@@ -723,7 +721,7 @@ A second prune after time has advanced correctly evicts newly-expired keys from 
 |---|---|
 | Default dedup behavior, no time-sensitivity | `OperationJournal(plugin_data_path=tmp_path)` |
 | Pruning correctness with fake clock | `OperationJournal(plugin_data_path=tmp_path, clock=lambda: aware_datetime)` |
-| Explicit cutoff override | Pass `now=aware_datetime` to `prune_audit_logs()` |
+| Time-advance between prune calls | Use a mutable clock container: `clock_state = [t0]; journal = OperationJournal(..., clock=lambda: clock_state[0])`; mutate `clock_state[0] = t1` between calls (covers §8.6 second-prune eviction) |
 | Direct-construction dedup safety | Construct without calling prune; first `append_*_once` exercises `_ensure_audit_seen_loaded` or `_ensure_outcomes_seen_loaded` (per source file) |
 
 A small fixture helper keeps tests tight:
@@ -732,6 +730,8 @@ A small fixture helper keeps tests tight:
 def fixed_clock(at: datetime) -> Callable[[], datetime]:
     return lambda: at
 ```
+
+**Fake-clock surface discipline.** With no method-level clock override, the constructor `clock=` seam governs both `prune_audit_logs()` cutoff AND `journal.timestamp()` outputs. Fixture records generated via `journal.timestamp()` therefore receive the fake clock's value, which can interact with prune cutoffs in unintended ways. When fixture records need timestamps independent of the prune-cutoff time, generate them explicitly — `AuditEvent.timestamp` and `OutcomeRecord.timestamp` are `str` fields per `server/models.py`, so use a literal `"2026-04-01T00:00:00Z"` or `datetime(2026, 4, 1, tzinfo=UTC).isoformat().replace("+00:00", "Z")` rather than `journal.timestamp()`. Reach for `journal.timestamp()` in fixtures only when the test deliberately wants the fake clock's value (e.g., asserting that a freshly-appended record's timestamp matches the injected clock).
 
 ### 6.5 Operating envelope
 
@@ -840,8 +840,7 @@ All journal-internal tests in `tests/test_journal.py`. **Bootstrap-integration t
 
 ### 8.5 Clock seam
 - `test_prune_audit_logs_uses_injected_clock`
-- `test_prune_audit_logs_rejects_naive_clock` — `clock=lambda: datetime(2026, 5, 12)`; first `_now()` raises `ValueError`.
-- `test_prune_audit_logs_rejects_naive_explicit_now` — `now=datetime(2026, 5, 12)`; raises `ValueError`.
+- `test_prune_audit_logs_rejects_naive_clock` — `clock=lambda: datetime(2026, 5, 12)`; first `_now()` raises `ValueError`. (The constructor `clock=` seam is the sole clock surface; no method-level override exists. See round-7 audit for the leaf-seam rationale.)
 - `test_prune_audit_logs_normalizes_non_utc_aware_timestamps` — record timestamp at `+09:00` offset, cutoff in UTC; assert correct comparison.
 
 ### 8.6 Re-runnable prune (atomic rebuild)
@@ -860,7 +859,7 @@ All journal-internal tests in `tests/test_journal.py`. **Bootstrap-integration t
 - `test_ensure_outcomes_seen_loaded_does_not_mark_initialized_on_failure` — same for outcomes flag with a non-UTF-8 exception; `_audit_seen_initialized` unaffected.
 - `test_ensure_audit_seen_loaded_quarantines_on_invalid_utf8` — construct journal without calling prune; pre-populate `events.jsonl` with an invalid UTF-8 byte sequence; call `append_dialogue_audit_event_once(...)` with a valid event; assert the corrupt file was renamed to a `events.corrupt-<utc-ts>.jsonl` sibling; assert the audit append succeeded against a fresh `events.jsonl` containing exactly one record; assert `_audit_seen_initialized == True` and `_audit_seen` contains exactly the newly-appended key (not any pre-quarantine ghost). Pins F1 (round-6): runtime path shares the same quarantine policy as startup, closing the failure-class boundary that would otherwise leak `UnicodeDecodeError` into `dialogue._finalize_confirmed_turn`.
 - `test_ensure_outcomes_seen_loaded_quarantines_on_invalid_utf8` — mirror for outcomes, using `append_dialogue_outcome_once`.
-- `test_append_after_quarantine_can_re_append_quarantined_record_as_duplicate` — quarantine `events.jsonl` via the runtime path with a record `R` present only in the corrupt file (so `R` is unrecoverable from disk); call `append_dialogue_audit_event_once(R)` twice; assert both calls add records to disk (no dedup because the in-memory seen-set was emptied by quarantine and the pre-quarantine seen state was lost with the file). Pins F1 (round-6) explicit trade-off: post-quarantine records can re-append as duplicates — corrupt diagnostic data does not block live workflow finalization.
+- `test_append_after_quarantine_reappends_once_then_resumes_dedup` — quarantine `events.jsonl` via the runtime path with a record `R` present only in the corrupt file (so `R` is unrecoverable from disk); call `append_dialogue_audit_event_once(R)` twice; assert the first call writes a record (single accepted duplicate vs the quarantined ghost — the in-memory seen-set was emptied by quarantine and the pre-quarantine seen state was lost with the file); assert the second call hits the now-populated seen-set and is skipped (no second disk write). Pins F1 (round-6) explicit trade-off and the §2 contract phrasing "may be re-appended once": exactly one duplicate accepted post-quarantine, then normal dedup behavior resumes — corrupt diagnostic data does not block live workflow finalization, AND the post-quarantine re-append does not permanently disable `_once` semantics.
 
 ### 8.8 Dedup-set update invariant
 - `test_append_dialogue_audit_event_once_skips_when_key_in_seen_set`
@@ -899,6 +898,8 @@ rg "except \(OSError, UnicodeDecodeError\)" scripts/            # zero hits — 
 ```
 
 The `_quarantine_corrupt_jsonl` helper (round-6 F1) must be called from exactly four sites in `server/journal.py`: two from `prune_audit_logs` (audit and outcomes try/except blocks) and one each from `_ensure_audit_seen_loaded` and `_ensure_outcomes_seen_loaded`. A `rg "_quarantine_corrupt_jsonl" server/journal.py` returning fewer than 5 matches (1 def + 4 call sites) means the failure-class-boundary closure did not land everywhere. Spot-check by reading the four call sites for the `except UnicodeDecodeError` catch.
+
+**Manual structural review-gate (round-7 F5).** Any future production reader that enumerates files under `${CLAUDE_PLUGIN_DATA}/audit/` or `${CLAUDE_PLUGIN_DATA}/analytics/` (via `glob`, `rglob`, `os.scandir`, `os.listdir`, `pathlib.Path.iterdir`, or equivalent directory enumeration) must explicitly exclude or separately classify `*.corrupt-*` siblings per the §2 Reader Classification taxonomy. This gate is a **structural review item**, not a regex check: production already has unrelated `glob`/`rglob` usage in `server/containment.py` (containment-policy enumeration) and `scripts/compare_app_server_schemas.py` (schema-diff tooling), so a grep-based detector would lose signal in unrelated false positives. The review item lives here so future slices touching directory enumeration in the audit/analytics paths catch the requirement during design, not during a failure-investigation rediscovery. F4 itself targets `events.jsonl` and `outcomes.jsonl` by exact name and is not exposed.
 
 Per the verification-before-completion discipline, the implementation plan must include this block as its final step and report the actual output before any "done" claim.
 
