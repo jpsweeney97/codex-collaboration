@@ -15,6 +15,7 @@ See delivery.md §Plugin Component Structure for the normative location.
 
 from __future__ import annotations
 
+import logging
 import sys
 from pathlib import Path
 from typing import Callable
@@ -36,6 +37,9 @@ from server.mcp_server import McpServer  # noqa: E402
 from server.pending_request_store import PendingRequestStore  # noqa: E402
 from server.turn_store import TurnStore  # noqa: E402
 from server.worktree_manager import WorktreeManager  # noqa: E402
+
+
+logger = logging.getLogger(__name__)
 
 
 def _read_session_id(plugin_data_path: Path) -> str:
@@ -140,6 +144,39 @@ def _build_delegation_factory(
 def main() -> None:
     plugin_data_path = default_plugin_data_path()
     journal = OperationJournal(plugin_data_path)
+    try:
+        summary = journal.prune_audit_logs()
+    except OSError:
+        logger.warning(
+            "startup retention cleanup failed or incomplete; continuing",
+            exc_info=True,
+        )
+    else:
+        summary_msg = (
+            "audit prune complete: audit_retained=%d audit_dropped=%d "
+            "audit_retained_malformed=%d outcomes_retained=%d "
+            "outcomes_dropped=%d outcomes_retained_malformed=%d "
+            "audit_quarantined_to=%s outcomes_quarantined_to=%s"
+        )
+        summary_args = (
+            summary.audit_retained,
+            summary.audit_dropped,
+            summary.audit_retained_malformed,
+            summary.outcomes_retained,
+            summary.outcomes_dropped,
+            summary.outcomes_retained_malformed,
+            summary.audit_quarantined_to,
+            summary.outcomes_quarantined_to,
+        )
+        if (
+            summary.audit_retained_malformed > 0
+            or summary.outcomes_retained_malformed > 0
+            or summary.audit_quarantined_to is not None
+            or summary.outcomes_quarantined_to is not None
+        ):
+            logger.warning(summary_msg, *summary_args)
+        else:
+            logger.info(summary_msg, *summary_args)
 
     control_plane = ControlPlane(
         plugin_data_path=plugin_data_path,
