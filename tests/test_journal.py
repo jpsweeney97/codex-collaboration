@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+import os
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Callable
 
 import pytest
 
-from server.journal import OperationJournal
+from server.journal import OperationJournal, PruneSummary
 from server.models import (
     AuditEvent,
     DelegationOutcomeRecord,
@@ -183,6 +184,375 @@ class TestAuditRetentionClock:
 
         with pytest.raises(ValueError, match="Journal clock requires"):
             journal.prune_audit_logs()
+
+
+class TestAuditRetentionPruning:
+    def test_prune_audit_logs_drops_records_older_than_ttl(
+        self, tmp_path: Path
+    ) -> None:
+        now = datetime(2026, 5, 12, tzinfo=UTC)
+        journal = OperationJournal(tmp_path / "plugin-data", clock=_fixed_clock(now))
+        audit_path = tmp_path / "plugin-data" / "audit" / "events.jsonl"
+        journal.append_audit_event(
+            _audit_event(event_id="old", timestamp="2026-04-11T23:59:59Z")
+        )
+        journal.append_audit_event(
+            _audit_event(event_id="new", timestamp="2026-04-12T00:00:00Z")
+        )
+
+        summary = journal.prune_audit_logs()
+
+        records = _read_jsonl(audit_path)
+        assert [record["event_id"] for record in records] == ["new"]
+        assert summary.audit_retained == 1
+        assert summary.audit_dropped == 1
+
+    def test_prune_audit_logs_retains_records_within_ttl(
+        self, tmp_path: Path
+    ) -> None:
+        now = datetime(2026, 5, 12, tzinfo=UTC)
+        journal = OperationJournal(tmp_path / "plugin-data", clock=_fixed_clock(now))
+        audit_path = tmp_path / "plugin-data" / "audit" / "events.jsonl"
+        journal.append_audit_event(
+            _audit_event(event_id="recent-1", timestamp="2026-05-01T00:00:00Z")
+        )
+        journal.append_audit_event(
+            _audit_event(event_id="recent-2", timestamp="2026-05-10T00:00:00Z")
+        )
+
+        summary = journal.prune_audit_logs()
+
+        records = _read_jsonl(audit_path)
+        assert [record["event_id"] for record in records] == ["recent-1", "recent-2"]
+        assert summary.audit_retained == 2
+        assert summary.audit_dropped == 0
+
+    def test_prune_audit_logs_retains_record_exactly_at_ttl_boundary(
+        self, tmp_path: Path
+    ) -> None:
+        """A record dated exactly `now - 30 days` must be retained."""
+        now = datetime(2026, 5, 12, tzinfo=UTC)
+        boundary_ts = (now - timedelta(days=30)).isoformat().replace("+00:00", "Z")
+        journal = OperationJournal(tmp_path / "plugin-data", clock=_fixed_clock(now))
+        audit_path = tmp_path / "plugin-data" / "audit" / "events.jsonl"
+        journal.append_audit_event(
+            _audit_event(event_id="boundary", timestamp=boundary_ts)
+        )
+
+        summary = journal.prune_audit_logs()
+
+        records = _read_jsonl(audit_path)
+        assert [record["event_id"] for record in records] == ["boundary"]
+        assert summary.audit_retained == 1
+        assert summary.audit_dropped == 0
+
+    def test_prune_audit_logs_prunes_outcomes_jsonl(self, tmp_path: Path) -> None:
+        now = datetime(2026, 5, 12, tzinfo=UTC)
+        journal = OperationJournal(tmp_path / "plugin-data", clock=_fixed_clock(now))
+        outcomes_path = tmp_path / "plugin-data" / "analytics" / "outcomes.jsonl"
+        journal.append_outcome(
+            _dialogue_outcome(outcome_id="old", timestamp="2026-04-11T23:59:59Z")
+        )
+        journal.append_outcome(
+            _dialogue_outcome(outcome_id="new", timestamp="2026-04-12T00:00:00Z")
+        )
+
+        summary = journal.prune_audit_logs()
+
+        records = _read_jsonl(outcomes_path)
+        assert [record["outcome_id"] for record in records] == ["new"]
+        assert summary.outcomes_retained == 1
+        assert summary.outcomes_dropped == 1
+
+    def test_prune_audit_logs_missing_files_are_noop(self, tmp_path: Path) -> None:
+        now = datetime(2026, 5, 12, tzinfo=UTC)
+        journal = OperationJournal(tmp_path / "plugin-data", clock=_fixed_clock(now))
+
+        summary = journal.prune_audit_logs()
+
+        assert summary == PruneSummary(0, 0, 0, 0, 0, 0)
+
+    def test_prune_audit_logs_empty_file_is_noop(self, tmp_path: Path) -> None:
+        now = datetime(2026, 5, 12, tzinfo=UTC)
+        journal = OperationJournal(tmp_path / "plugin-data", clock=_fixed_clock(now))
+        audit_path = tmp_path / "plugin-data" / "audit" / "events.jsonl"
+        audit_path.parent.mkdir(parents=True, exist_ok=True)
+        audit_path.write_text("", encoding="utf-8")
+        outcomes_path = tmp_path / "plugin-data" / "analytics" / "outcomes.jsonl"
+        outcomes_path.parent.mkdir(parents=True, exist_ok=True)
+        outcomes_path.write_text("", encoding="utf-8")
+
+        summary = journal.prune_audit_logs()
+
+        assert summary == PruneSummary(0, 0, 0, 0, 0, 0)
+        assert audit_path.read_text(encoding="utf-8") == ""
+        assert outcomes_path.read_text(encoding="utf-8") == ""
+
+    def test_prune_audit_logs_normalizes_non_utc_aware_timestamps(
+        self, tmp_path: Path
+    ) -> None:
+        now = datetime(2026, 5, 12, tzinfo=UTC)
+        journal = OperationJournal(tmp_path / "plugin-data", clock=_fixed_clock(now))
+        audit_path = tmp_path / "plugin-data" / "audit" / "events.jsonl"
+        journal.append_audit_event(
+            _audit_event(
+                event_id="us-cdt-retain",
+                timestamp="2026-04-11T20:00:00-05:00",
+                turn_id="turn-A",
+            )
+        )
+        journal.append_audit_event(
+            _audit_event(
+                event_id="jp-drop",
+                timestamp="2026-04-12T08:59:59+09:00",
+                turn_id="turn-B",
+            )
+        )
+
+        summary = journal.prune_audit_logs()
+
+        records = _read_jsonl(audit_path)
+        assert [record["event_id"] for record in records] == ["us-cdt-retain"]
+        assert summary.audit_retained == 1
+        assert summary.audit_dropped == 1
+
+
+@pytest.mark.parametrize(
+    "timestamp_value",
+    [
+        pytest.param(None, id="missing"),
+        pytest.param(42, id="non-string"),
+        pytest.param("not-a-date", id="unparseable"),
+        pytest.param("2026-04-01T00:00:00", id="timezone-naive"),
+    ],
+)
+def test_prune_audit_logs_retains_records_with_uncertain_timestamps(
+    tmp_path: Path, timestamp_value: object
+) -> None:
+    now = datetime(2026, 5, 12, tzinfo=UTC)
+    journal = OperationJournal(tmp_path / "plugin-data", clock=_fixed_clock(now))
+    audit_path = tmp_path / "plugin-data" / "audit" / "events.jsonl"
+    record = {
+        "event_id": "uncertain",
+        "timestamp": timestamp_value,
+        "actor": "claude",
+        "action": "dialogue_turn",
+        "collaboration_id": "collab-1",
+        "runtime_id": "rt-1",
+        "turn_id": "turn-1",
+    }
+    if timestamp_value is None:
+        record.pop("timestamp")
+    audit_path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+
+    summary = journal.prune_audit_logs()
+
+    assert _read_jsonl(audit_path)[0]["event_id"] == "uncertain"
+    assert summary.audit_retained_malformed == 1
+
+
+def test_prune_audit_logs_retains_malformed_json_line(tmp_path: Path) -> None:
+    now = datetime(2026, 5, 12, tzinfo=UTC)
+    journal = OperationJournal(tmp_path / "plugin-data", clock=_fixed_clock(now))
+    audit_path = tmp_path / "plugin-data" / "audit" / "events.jsonl"
+    audit_path.parent.mkdir(parents=True, exist_ok=True)
+    audit_path.write_text("{not-valid-json\n", encoding="utf-8")
+
+    summary = journal.prune_audit_logs()
+
+    assert audit_path.read_text(encoding="utf-8") == "{not-valid-json\n"
+    assert summary.audit_retained == 1
+    assert summary.audit_retained_malformed == 1
+    assert summary.audit_dropped == 0
+
+
+def test_prune_audit_logs_retains_non_dict_record(tmp_path: Path) -> None:
+    now = datetime(2026, 5, 12, tzinfo=UTC)
+    journal = OperationJournal(tmp_path / "plugin-data", clock=_fixed_clock(now))
+    audit_path = tmp_path / "plugin-data" / "audit" / "events.jsonl"
+    audit_path.parent.mkdir(parents=True, exist_ok=True)
+    audit_path.write_text('[1, 2, 3]\n"a-bare-string"\n42\n', encoding="utf-8")
+
+    summary = journal.prune_audit_logs()
+
+    assert audit_path.read_text(encoding="utf-8") == '[1, 2, 3]\n"a-bare-string"\n42\n'
+    assert summary.audit_retained == 3
+    assert summary.audit_retained_malformed == 3
+    assert summary.audit_dropped == 0
+
+
+def test_prune_audit_logs_drops_blank_lines(tmp_path: Path) -> None:
+    now = datetime(2026, 5, 12, tzinfo=UTC)
+    journal = OperationJournal(tmp_path / "plugin-data", clock=_fixed_clock(now))
+    audit_path = tmp_path / "plugin-data" / "audit" / "events.jsonl"
+    audit_path.parent.mkdir(parents=True, exist_ok=True)
+    raw = (
+        '{"event_id":"a","timestamp":"2026-05-01T00:00:00Z",'
+        '"actor":"claude","action":"dialogue_turn",'
+        '"collaboration_id":"collab-1","runtime_id":"rt-1"}\n'
+        "\n"
+        "   \n"
+        '{"event_id":"b","timestamp":"2026-05-02T00:00:00Z",'
+        '"actor":"claude","action":"dialogue_turn",'
+        '"collaboration_id":"collab-1","runtime_id":"rt-1"}\n'
+    )
+    audit_path.write_text(raw, encoding="utf-8")
+
+    summary = journal.prune_audit_logs()
+
+    records = _read_jsonl(audit_path)
+    assert [record["event_id"] for record in records] == ["a", "b"]
+    assert summary.audit_retained == 2
+    assert summary.audit_dropped == 0
+    assert audit_path.read_text(encoding="utf-8").count("\n") == 2
+
+
+def test_prune_audit_logs_preserves_retained_record_text_and_adds_final_lf(
+    tmp_path: Path,
+) -> None:
+    now = datetime(2026, 5, 12, tzinfo=UTC)
+    journal = OperationJournal(tmp_path / "plugin-data", clock=_fixed_clock(now))
+    audit_path = tmp_path / "plugin-data" / "audit" / "events.jsonl"
+    raw = (
+        '{"event_id":"kept", "timestamp":"2026-05-01T00:00:00Z", '
+        '"actor":"claude", "action":"dialogue_turn", '
+        '"collaboration_id":"collab-1", "runtime_id":"rt-1"}'
+    )
+    audit_path.write_text(raw, encoding="utf-8")
+
+    journal.prune_audit_logs()
+
+    assert audit_path.read_text(encoding="utf-8") == raw + "\n"
+
+
+def test_prune_audit_logs_pins_lf_only_file_format(tmp_path: Path) -> None:
+    now = datetime(2026, 5, 12, tzinfo=UTC)
+    journal = OperationJournal(tmp_path / "plugin-data", clock=_fixed_clock(now))
+    audit_path = tmp_path / "plugin-data" / "audit" / "events.jsonl"
+    audit_path.write_bytes(
+        (
+            '{"event_id":"kept","timestamp":"2026-05-01T00:00:00Z",'
+            '"actor":"claude","action":"dialogue_turn",'
+            '"collaboration_id":"collab-1","runtime_id":"rt-1"}\r\n'
+        ).encode("utf-8")
+    )
+
+    journal.prune_audit_logs()
+
+    assert b"\r" not in audit_path.read_bytes()
+
+
+def test_prune_audit_logs_preserves_original_on_fsync_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now = datetime(2026, 5, 12, tzinfo=UTC)
+    journal = OperationJournal(tmp_path / "plugin-data", clock=_fixed_clock(now))
+    audit_path = tmp_path / "plugin-data" / "audit" / "events.jsonl"
+    original = (
+        '{"event_id":"kept","timestamp":"2026-05-01T00:00:00Z",'
+        '"actor":"claude","action":"dialogue_turn",'
+        '"collaboration_id":"collab-1","runtime_id":"rt-1"}\n'
+    )
+    audit_path.write_text(original, encoding="utf-8")
+
+    def fail_fsync(fd: int) -> None:
+        raise OSError("fsync failed")
+
+    monkeypatch.setattr(os, "fsync", fail_fsync)
+
+    with pytest.raises(OSError, match="fsync failed"):
+        journal.prune_audit_logs()
+
+    assert audit_path.read_text(encoding="utf-8") == original
+
+
+def test_prune_audit_logs_preserves_original_on_replace_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now = datetime(2026, 5, 12, tzinfo=UTC)
+    journal = OperationJournal(tmp_path / "plugin-data", clock=_fixed_clock(now))
+    audit_path = tmp_path / "plugin-data" / "audit" / "events.jsonl"
+    original = (
+        '{"event_id":"kept","timestamp":"2026-05-01T00:00:00Z",'
+        '"actor":"claude","action":"dialogue_turn",'
+        '"collaboration_id":"collab-1","runtime_id":"rt-1"}\n'
+    )
+    audit_path.write_text(original, encoding="utf-8")
+
+    def fail_replace(src: str | Path, dst: str | Path) -> None:
+        raise OSError("replace failed")
+
+    monkeypatch.setattr(os, "replace", fail_replace)
+
+    with pytest.raises(OSError, match="replace failed"):
+        journal.prune_audit_logs()
+
+    assert audit_path.read_text(encoding="utf-8") == original
+
+
+def test_prune_audit_logs_evicts_newly_expired_keys_on_second_run(
+    tmp_path: Path,
+) -> None:
+    t0 = datetime(2026, 5, 12, tzinfo=UTC)
+    clock_state = [t0]
+    journal = OperationJournal(tmp_path / "plugin-data", clock=_mutable_clock(clock_state))
+    audit_path = tmp_path / "plugin-data" / "audit" / "events.jsonl"
+    a_ts = "2026-04-13T00:00:00Z"
+    journal.append_audit_event(_audit_event(event_id="A", timestamp=a_ts))
+
+    summary1 = journal.prune_audit_logs()
+    assert summary1.audit_retained == 1
+    assert ("dialogue_turn", "collab-1", "turn-1") in journal._audit_seen
+
+    clock_state[0] = t0 + timedelta(days=31)
+
+    summary2 = journal.prune_audit_logs()
+    assert summary2.audit_retained == 0
+    assert summary2.audit_dropped == 1
+    assert _read_jsonl(audit_path) == []
+    assert ("dialogue_turn", "collab-1", "turn-1") not in journal._audit_seen
+
+
+def test_prune_audit_logs_restores_per_file_flag_after_each_pass(
+    tmp_path: Path,
+) -> None:
+    now = datetime(2026, 5, 12, tzinfo=UTC)
+    journal = OperationJournal(tmp_path / "plugin-data", clock=_fixed_clock(now))
+    journal.append_audit_event(_audit_event(timestamp="2026-05-01T00:00:00Z"))
+    journal.append_outcome(_dialogue_outcome(timestamp="2026-05-01T00:00:00Z"))
+
+    journal.prune_audit_logs()
+
+    assert journal._audit_seen_initialized is True
+    assert journal._outcomes_seen_initialized is True
+
+
+def test_prune_audit_logs_partial_failure_keeps_outcomes_flag_cleared(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now = datetime(2026, 5, 12, tzinfo=UTC)
+    journal = OperationJournal(tmp_path / "plugin-data", clock=_fixed_clock(now))
+    journal.append_audit_event(_audit_event(timestamp="2026-05-01T00:00:00Z"))
+    journal.append_outcome(_dialogue_outcome(timestamp="2026-05-01T00:00:00Z"))
+
+    journal.prune_audit_logs()
+    assert journal._audit_seen_initialized is True
+    assert journal._outcomes_seen_initialized is True
+
+    real_pass = journal._prune_jsonl_pass
+
+    def selective_fail(*, path: Path, cutoff: datetime, populate: Callable[..., None]):
+        if path == journal._outcomes_path:
+            raise OSError("outcomes prune failed")
+        return real_pass(path=path, cutoff=cutoff, populate=populate)
+
+    monkeypatch.setattr(journal, "_prune_jsonl_pass", selective_fail)
+
+    with pytest.raises(OSError, match="outcomes prune failed"):
+        journal.prune_audit_logs()
+
+    assert journal._audit_seen_initialized is True
+    assert journal._outcomes_seen_initialized is False
 
 
 class TestPhasedJournal:
