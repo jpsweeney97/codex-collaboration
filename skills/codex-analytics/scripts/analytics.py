@@ -13,7 +13,13 @@ from pathlib import Path
 
 
 def _read_jsonl(path: Path) -> tuple[list[dict[str, object]], int]:
-    """Read a JSONL file, skipping malformed lines. Returns (records, malformed_count)."""
+    """Read a JSONL file, skipping malformed lines. Returns (records, malformed_count).
+
+    Lines that decode to a non-dict JSON value (e.g. ``[1, 2, 3]`` retained by the
+    F4 prune as forensic evidence per server.journal §retain-on-uncertainty) are
+    counted as malformed rather than appended, since downstream code calls
+    ``.get()`` on each record.
+    """
     if not path.exists():
         return [], 0
     records: list[dict[str, object]] = []
@@ -22,9 +28,14 @@ def _read_jsonl(path: Path) -> tuple[list[dict[str, object]], int]:
         if not line.strip():
             continue
         try:
-            records.append(json.loads(line))
+            value = json.loads(line)
         except json.JSONDecodeError:
             malformed += 1
+            continue
+        if not isinstance(value, dict):
+            malformed += 1
+            continue
+        records.append(value)
     return records, malformed
 
 
