@@ -48,7 +48,7 @@ After this slice lands, the following hold:
 - Spec amendments to `docs/specs/recovery-and-journal.md`: §Two-Log Architecture table retention row, new §Operational Outcomes subsection, §Audit Log → Retention subsection rewrite, and §Retention Defaults table.
 - New tests in `tests/test_journal.py` (journal-internal: pruning, dedup, atomic-rewrite, per-file lifecycle) and `tests/test_bootstrap.py` (§8.9 bootstrap-integration invariants).
 - Migration of any existing tests that exercised `_jsonl_contains` semantics.
-- Consumer-doc updates to reflect the 30-day outcome retention horizon: `docs/specs/decisions.md` (analytics-source bullet) and `skills/codex-analytics/SKILL.md` (data-location section). Both currently describe outcomes as unbounded append-only data; they must note the 30-day operational window and that records beyond it are pruned at startup.
+- Consumer-facing analytics updates to reflect the 30-day outcome retention horizon: `docs/specs/decisions.md` (analytics-source bullet), `skills/codex-analytics/SKILL.md` (data-location section), and `skills/codex-analytics/scripts/analytics.py` (Data Sources output). These currently describe or present outcomes as unbounded append-only history; they must state the 30-day operational window. The script output must label counts as retention-window counts and include the observed timestamp range, so users do not mistake post-prune records for total historical analytics.
 
 ### Out (deferred)
 
