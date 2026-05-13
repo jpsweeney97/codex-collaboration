@@ -17,7 +17,7 @@ The plugin maintains two separate logs with different purposes, write discipline
 |---|---|---|
 | Purpose | Idempotent replay after crash | Human incident reconstruction |
 | Write discipline | fsync before dispatch | Best-effort append |
-| Retention | Trim on operation completion | TTL-based (30 days) |
+| Retention | Trim on operation completion | TTL-based (30 days from event timestamp), pruned at plugin startup |
 | Scope | Session-bounded (v1) | Cross-session |
 | Consumer | Control plane (automatic recovery) | Claude + user (diagnostics) |
 | Format | Operation records with idempotency keys | [AuditEvent](contracts.md#auditevent) records (JSONL) |
@@ -25,6 +25,12 @@ The plugin maintains two separate logs with different purposes, write discipline
 ### Why Two Logs
 
 The audit log answers "what happened?" The operation journal answers "what was I in the middle of doing?" They have different write patterns, different retention windows, and different consumers. Merging them would either over-retain operational state or under-protect the audit trail.
+
+### Operational Outcomes
+
+A third file, `${CLAUDE_PLUGIN_DATA}/analytics/outcomes.jsonl`, holds delegation and dialogue terminal outcome records (`OutcomeRecord` and `DelegationOutcomeRecord`). It shares the Audit Log's retention class - best-effort append, 30-day TTL, startup-pruned, single-writer ownership - but uses a different record format (typed terminal outcomes rather than per-event audit entries) and a different consumer (retrospective diagnostics rather than incident reconstruction).
+
+**Outcomes are operational diagnostics with a 30-day operational horizon, not long-term analytics history.** A future feature that consumes outcomes for long-term analytics must introduce a separate retention class before shipping.
 
 ## Operation Journal
 
@@ -134,9 +140,11 @@ An audit event is emitted for every state transition that crosses a trust or cap
 
 ### Retention
 
-- **Default TTL:** 30 days from event timestamp.
-- **Storage:** JSONL in `${CLAUDE_PLUGIN_DATA}/audit/`.
-- **Cleanup:** Old records are pruned on plugin startup and periodically during session.
+- **Default TTL:** Operational retention for audit and outcome JSONL records uses the same 30-day TTL. `audit/events.jsonl` and `analytics/outcomes.jsonl` are pruned from each record's event timestamp.
+- **Retain-on-uncertainty:** Records with missing, non-string, unparseable, or timezone-naive timestamps are retained and counted. They are **TTL-exempt by design** because the system cannot prove they are outside the retention window without risking diagnostic data loss.
+- **Storage and rewrite:** Audit records are stored as JSONL in `${CLAUDE_PLUGIN_DATA}/audit/events.jsonl`; outcome records are stored as JSONL in `${CLAUDE_PLUGIN_DATA}/analytics/outcomes.jsonl`. Pruning is atomic per file, preserves retained record text, removes blank lines, and keeps UTF-8 with LF-only line endings.
+- **Corruption handling:** Invalid UTF-8 is file-level corruption with automatic quarantine. The affected file is renamed to a forensic sibling matching `<stem>.corrupt-<utc-ts><suffix>`, with deterministic numeric suffixes on collisions. JSON parse failures stay record-local and follow retain-on-uncertainty instead of quarantine.
+- **Cleanup trigger:** Old records are pruned on plugin startup. Periodic-during-session pruning is not implemented in v1.
 
 ## Crash Recovery Paths
 
@@ -205,13 +213,14 @@ v1 resolves this with same-thread next-turn context injection. Successful promot
 
 ## Retention Defaults
 
-Canonical retention values. All TTLs are measured from `last_touched_at`, not creation time.
+Canonical retention values. TTL triggers vary by resource: see the Trigger column. Most TTLs are measured from `last_touched_at`; audit log and outcome records use their event timestamp.
 
 | Resource | TTL | Trigger |
 |---|---|---|
 | Completed worktree | 1 hour | After promotion or discard |
 | Failed/crashed worktree | 24 hours | After crash detection or failure |
-| Audit log records | 30 days | From event timestamp |
+| Audit log records (`events.jsonl`) | 30 days | From event timestamp |
+| Outcome records (`outcomes.jsonl`) | 30 days | From event timestamp |
 | Advisory runtime | Session end | Claude session termination |
 | Abandoned sessions | Next startup | Scan for orphaned runtimes/worktrees |
 | Diff/test summary | Survives worktree cleanup | Retained in `${CLAUDE_PLUGIN_DATA}` after worktree removal |

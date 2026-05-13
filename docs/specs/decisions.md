@@ -92,9 +92,10 @@ cross-model `codex-reviewer` agent is replaced by a `codex-review` skill over
 **Key decisions:**
 
 - **Analytics source:** `analytics/outcomes.jsonl` (advisory and delegation
-  terminal outcomes) plus `audit/events.jsonl` (lifecycle and security). No new
-  cross-model-style flat emitter. No raw-store walking as the primary analytics
-  contract.
+  terminal outcomes) plus `audit/events.jsonl` (lifecycle and security), both
+  interpreted as retention-window operational diagnostics after F4 audit
+  retention. No new cross-model-style flat emitter. No raw-store walking as the
+  primary analytics contract.
 - **Outcome shape split:** Advisory outcomes (`OutcomeRecord`) and delegation
   terminal outcomes (`DelegationOutcomeRecord`) are separate typed records in a
   union stream. Delegation execution terminal state and user disposition
