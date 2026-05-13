@@ -2248,7 +2248,7 @@ def test_data_header_reports_observed_timestamp_ranges(self, tmp_path: Path) -> 
     assert "Audit observed timestamp range:" in output
 ```
 
-Add a test that pins the round-1 F2 parseable-only filter - malformed string timestamps must NOT define the range endpoints, and the count of skipped records must surface separately. This test bypasses `_run_analytics()` because that helper calls `_write_fixtures()` against `tmp_path / "data"` and would overwrite anything written elsewhere; instead invoke the analytics script directly with custom fixture paths so the malformed records are actually read:
+Add a test that pins the round-1 F2 parseable-only filter - malformed string timestamps must NOT define the range endpoints, and the count of skipped records must surface separately per file. This test bypasses `_run_analytics()` because that helper calls `_write_fixtures()` against `tmp_path / "data"` and would overwrite anything written elsewhere; instead invoke the analytics script directly with custom fixture paths so the malformed records are actually read:
 
 ```python
 def test_data_header_excludes_malformed_timestamps_from_range(
@@ -2279,7 +2279,18 @@ def test_data_header_excludes_malformed_timestamps_from_range(
         '"turn_sequence":3}\n',
         encoding="utf-8",
     )
-    audit_path.write_text("", encoding="utf-8")
+    audit_path.write_text(
+        '{"event_id":"valid-audit","timestamp":"2026-05-02T12:30:00Z",'
+        '"actor":"claude","action":"dialogue_turn","collaboration_id":"c",'
+        '"runtime_id":"r","turn_id":"t"}\n'
+        '{"event_id":"bad-audit","timestamp":"bad-audit-date",'
+        '"actor":"claude","action":"dialogue_turn","collaboration_id":"c",'
+        '"runtime_id":"r","turn_id":"t2"}\n'
+        '{"event_id":"naive-audit","timestamp":"2026-05-02T12:30:00",'
+        '"actor":"claude","action":"dialogue_turn","collaboration_id":"c",'
+        '"runtime_id":"r","turn_id":"t3"}\n',
+        encoding="utf-8",
+    )
 
     result = subprocess.run(
         ["python3", str(ANALYTICS_SCRIPT), str(outcomes_path), str(audit_path)],
@@ -2296,8 +2307,18 @@ def test_data_header_excludes_malformed_timestamps_from_range(
     # The malformed/naive strings MUST NOT appear in the displayed range.
     assert "not-a-date" not in output
     assert "2026-04-01T00:00:00 " not in output  # naive form (no trailing Z)
-    # Missing/malformed count is surfaced per file.
-    assert "2 records with missing or malformed timestamps" in output
+    # Missing/malformed counts are surfaced on the correct per-file lines,
+    # not as a loose aggregate that could be swapped or double-counted.
+    assert (
+        "- Outcomes observed timestamp range: "
+        "2026-04-01T00:00:00Z to 2026-04-01T00:00:00Z "
+        "(2 records with missing or malformed timestamps)"
+    ) in output
+    assert (
+        "- Audit observed timestamp range: "
+        "2026-05-02T12:30:00Z to 2026-05-02T12:30:00Z "
+        "(2 records with missing or malformed timestamps)"
+    ) in output
 ```
 
 - [ ] **Step 2: Run analytics tests and verify failure**
