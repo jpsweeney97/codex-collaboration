@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Callable
 
 import pytest
 
@@ -85,6 +87,102 @@ def _make_intent(
         created_at="2026-03-28T00:00:00Z",
         repo_root="/repo",
     )
+
+
+def _fixed_clock(at: datetime) -> Callable[[], datetime]:
+    return lambda: at
+
+
+def _mutable_clock(at: list[datetime]) -> Callable[[], datetime]:
+    """Allow tests to advance the clock between prune calls."""
+    return lambda: at[0]
+
+
+def _audit_event(
+    *,
+    event_id: str = "event-1",
+    timestamp: str = "2026-04-21T00:00:00Z",
+    action: str = "dialogue_turn",
+    collaboration_id: str = "collab-1",
+    runtime_id: str = "rt-1",
+    turn_id: str | None = "turn-1",
+) -> AuditEvent:
+    return AuditEvent(
+        event_id=event_id,
+        timestamp=timestamp,
+        actor="claude",
+        action=action,
+        collaboration_id=collaboration_id,
+        runtime_id=runtime_id,
+        context_size=1024,
+        turn_id=turn_id,
+    )
+
+
+def _dialogue_outcome(
+    *,
+    outcome_id: str = "outcome-1",
+    timestamp: str = "2026-04-21T00:00:00Z",
+    outcome_type: str = "dialogue_turn",
+    collaboration_id: str = "collab-1",
+    runtime_id: str = "rt-1",
+    turn_id: str = "turn-1",
+) -> OutcomeRecord:
+    return OutcomeRecord(
+        outcome_id=outcome_id,
+        timestamp=timestamp,
+        outcome_type=outcome_type,
+        collaboration_id=collaboration_id,
+        runtime_id=runtime_id,
+        context_size=1024,
+        turn_id=turn_id,
+        turn_sequence=1,
+    )
+
+
+def _delegation_outcome(
+    *,
+    outcome_id: str = "delegation-outcome-1",
+    timestamp: str = "2026-04-21T00:00:00Z",
+    job_id: str = "job-1",
+) -> DelegationOutcomeRecord:
+    return DelegationOutcomeRecord(
+        outcome_id=outcome_id,
+        timestamp=timestamp,
+        outcome_type="delegation_terminal",
+        collaboration_id="collab-delegation",
+        runtime_id="rt-delegation",
+        job_id=job_id,
+        terminal_status="completed",
+        base_commit="abc123",
+    )
+
+
+def _read_jsonl(path: Path) -> list[dict[str, object]]:
+    if not path.exists():
+        return []
+    return [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+
+class TestAuditRetentionClock:
+    def test_timestamp_uses_injected_clock(self, tmp_path: Path) -> None:
+        now = datetime(2026, 5, 12, 20, 10, 39, tzinfo=UTC)
+        journal = OperationJournal(tmp_path / "plugin-data", clock=_fixed_clock(now))
+
+        assert journal.timestamp() == "2026-05-12T20:10:39Z"
+
+    def test_prune_audit_logs_rejects_naive_clock(self, tmp_path: Path) -> None:
+        journal = OperationJournal(
+            tmp_path / "plugin-data",
+            clock=lambda: datetime(2026, 5, 12, 20, 10, 39),
+        )
+
+        with pytest.raises(ValueError, match="Journal clock requires"):
+            journal.prune_audit_logs()
 
 
 class TestPhasedJournal:

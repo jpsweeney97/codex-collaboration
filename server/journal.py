@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -18,6 +19,36 @@ from .models import (
     StaleAdvisoryContextMarker,
 )
 from .replay import ReplayDiagnostics, SchemaViolation, replay_jsonl
+
+
+logger = logging.getLogger(__name__)
+
+_AUDIT_TTL_DAYS = 30
+
+_AuditDedupKey = tuple[str, str, str | None]
+_DialogueOutcomeDedupKey = tuple[str, str, str]
+_DelegationOutcomeDedupKey = tuple[str, str]
+
+
+@dataclass(frozen=True)
+class _PruneFileStats:
+    retained: int
+    dropped: int
+    retained_malformed: int
+
+
+@dataclass(frozen=True)
+class PruneSummary:
+    """Flat diagnostics for a single audit/outcome prune pass."""
+
+    audit_retained: int
+    audit_dropped: int
+    audit_retained_malformed: int
+    outcomes_retained: int
+    outcomes_dropped: int
+    outcomes_retained_malformed: int
+    audit_quarantined_to: Path | None = None
+    outcomes_quarantined_to: Path | None = None
 
 
 def default_plugin_data_path() -> Path:
@@ -69,6 +100,14 @@ _JOURNAL_OPTIONAL_STR = (
 )
 _JOURNAL_OPTIONAL_INT = ("turn_sequence", "context_size")
 _VALID_COMPLETION_ORIGINS = frozenset(("worker_completed", "recovered_unresolved"))
+
+
+def _coerce_aware_utc(value: datetime, *, source: str) -> datetime:
+    """Validate timezone-aware datetimes and normalize them to UTC."""
+
+    if value.tzinfo is None or value.tzinfo.utcoffset(value) is None:
+        raise ValueError(f"{source} requires a timezone-aware datetime. Got: {value!r}")
+    return value.astimezone(UTC)
 
 
 def _journal_callback(
@@ -202,8 +241,14 @@ def _journal_callback(
 class OperationJournal:
     """Session-bounded journal for stale advisory context markers."""
 
-    def __init__(self, plugin_data_path: Path | None = None) -> None:
+    def __init__(
+        self,
+        plugin_data_path: Path | None = None,
+        *,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
         self._plugin_data_path = plugin_data_path or default_plugin_data_path()
+        self._clock = clock or (lambda: datetime.now(UTC))
         self._journal_dir = self._plugin_data_path / "journal"
         self._markers_path = self._journal_dir / "stale_advisory_context.json"
         self._audit_dir = self._plugin_data_path / "audit"
@@ -213,6 +258,11 @@ class OperationJournal:
         self._analytics_dir = self._plugin_data_path / "analytics"
         self._outcomes_path = self._analytics_dir / "outcomes.jsonl"
         self._analytics_dir.mkdir(parents=True, exist_ok=True)
+        self._audit_seen_initialized = False
+        self._outcomes_seen_initialized = False
+        self._audit_seen: set[_AuditDedupKey] = set()
+        self._dialogue_outcomes_seen: set[_DialogueOutcomeDedupKey] = set()
+        self._delegation_outcomes_seen: set[_DelegationOutcomeDedupKey] = set()
 
     @property
     def plugin_data_path(self) -> Path:
@@ -404,6 +454,10 @@ class OperationJournal:
     def _operations_path(self, session_id: str) -> Path:
         return self._journal_dir / "operations" / f"{session_id}.jsonl"
 
+    def prune_audit_logs(self) -> PruneSummary:
+        self._now()
+        return PruneSummary(0, 0, 0, 0, 0, 0)
+
     @staticmethod
     def _jsonl_contains(
         path: Path, predicate: Callable[[dict[str, Any]], bool]
@@ -423,12 +477,15 @@ class OperationJournal:
                     return True
         return False
 
+    def _now(self) -> datetime:
+        """Current time per the injected clock."""
+
+        return _coerce_aware_utc(self._clock(), source="Journal clock")
+
     def timestamp(self) -> str:
         """Return the current UTC timestamp as ISO 8601."""
 
-        return (
-            datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-        )
+        return self._now().replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
     def _read_markers(self) -> dict[str, dict[str, str]]:
         if not self._markers_path.exists():
