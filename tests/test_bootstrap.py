@@ -314,6 +314,37 @@ class TestPublishSessionIdHook:
         )
         assert (tmp_path / "session_id").read_text(encoding="utf-8") == "new-session"
 
+    def test_warns_when_recent_different_session_id_exists(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "session_id").write_text("old-session", encoding="utf-8")
+        payload = json.dumps({"session_id": "new-session"})
+        result = subprocess.run(
+            [sys.executable, str(_hook_path)],
+            input=payload,
+            capture_output=True,
+            text=True,
+            env={**os.environ, "CLAUDE_PLUGIN_DATA": str(tmp_path)},
+            timeout=5,
+        )
+        assert result.returncode == 0
+        assert "concurrent session warning" in result.stderr
+        assert (tmp_path / "session_id").read_text(encoding="utf-8") == "new-session"
+
+    def test_no_warning_when_recent_session_id_is_same(self, tmp_path: Path) -> None:
+        (tmp_path / "session_id").write_text("same-session", encoding="utf-8")
+        payload = json.dumps({"session_id": "same-session"})
+        result = subprocess.run(
+            [sys.executable, str(_hook_path)],
+            input=payload,
+            capture_output=True,
+            text=True,
+            env={**os.environ, "CLAUDE_PLUGIN_DATA": str(tmp_path)},
+            timeout=5,
+        )
+        assert result.returncode == 0
+        assert "concurrent session warning" not in result.stderr
+
     def test_noop_without_plugin_data_env(self) -> None:
         payload = json.dumps({"session_id": "sess-noop"})
         env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PLUGIN_DATA"}

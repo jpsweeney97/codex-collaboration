@@ -123,7 +123,7 @@ The plugin enforces a fail-closed credential scanning chain on all content-beari
 
 ## Limitations
 
-- **Concurrent sessions unsupported:** Two simultaneous Claude sessions sharing this plugin will race on the session identity file. Single-session use only for the current rollout target.
+- **Concurrent sessions unsupported:** Two simultaneous Claude sessions sharing this plugin can collide on the session identity file and, in the promotion path, can both pass a pre-apply `HEAD == base_commit` check before one applies changes. Single-session use only for the current rollout target. If overlap is suspected, stop all sessions, inspect `git status`, keep only one session running, and re-run the relevant status or promotion command. The SessionStart hook emits a weak warning when it sees a recent different `session_id`, but this is only startup-overlap detection, not a cross-process promotion lock.
 - **No phased profiles:** Profiles with `phases` (e.g., `debugging`) are rejected until phase-progression support is implemented.
 
 ## Configuration

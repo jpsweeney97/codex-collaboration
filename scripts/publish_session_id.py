@@ -18,6 +18,9 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
+
+_RECENT_SESSION_WINDOW_SECONDS = 60.0
 
 
 def main() -> None:
@@ -36,6 +39,23 @@ def main() -> None:
 
     target = os.path.join(plugin_data, "session_id")
     tmp = target + ".tmp"
+    if os.path.exists(target):
+        try:
+            existing_session_id = open(target, encoding="utf-8").read().strip()
+            age_seconds = time.time() - os.path.getmtime(target)
+        except OSError:
+            existing_session_id = ""
+            age_seconds = _RECENT_SESSION_WINDOW_SECONDS + 1.0
+        if (
+            existing_session_id
+            and existing_session_id != session_id
+            and age_seconds <= _RECENT_SESSION_WINDOW_SECONDS
+        ):
+            print(
+                "codex-collaboration: concurrent session warning: "
+                "recent different session_id exists; single-session use only",
+                file=sys.stderr,
+            )
     with open(tmp, "w", encoding="utf-8") as f:
         f.write(session_id)
         f.flush()
