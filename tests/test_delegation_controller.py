@@ -25,6 +25,7 @@ from server.lineage_store import LineageStore
 from server.models import (
     AccountState,
     ArtifactInspectionSnapshot,
+    AuditEvent,
     CollaborationHandle,
     DelegationEscalation,
     DelegationJob,
@@ -2981,6 +2982,23 @@ def _build_promote_scenario(
     )
 
 
+def _rollback_audit_events(plugin_data: Path) -> list[dict[str, Any]]:
+    audit_path = plugin_data / "audit" / "events.jsonl"
+    if not audit_path.exists():
+        return []
+    events: list[dict[str, Any]] = []
+    for line in audit_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if payload.get("action") == "rollback":
+            events.append(payload)
+    return events
+
+
 def test_promote_rejects_dirty_primary_workspace(tmp_path: Path) -> None:
     """Promote rejects when the primary workspace has uncommitted changes."""
     controller, job_store, _journal, primary_repo, job_id, _hash, _cb = (
@@ -3176,6 +3194,12 @@ def test_promote_rolls_back_when_primary_workspace_verification_fails(
     persisted = job_store.get(job_id)
     assert persisted is not None
     assert persisted.promotion_state == "rolled_back"
+    rollback_events = _rollback_audit_events(plugin_data)
+    assert len(rollback_events) == 1
+    assert rollback_events[0]["actor"] == "system"
+    assert rollback_events[0]["job_id"] == job_id
+    assert rollback_events[0]["collaboration_id"] == job.collaboration_id
+    assert rollback_events[0]["runtime_id"] == job.runtime_id
 
 
 def test_promote_rollback_removes_new_files_created_by_reviewed_diff(
@@ -3474,6 +3498,238 @@ def test_recover_startup_replays_promotion_dispatched_state(tmp_path: Path) -> N
     assert recovered.promotion_state == "verified"
 
 
+def test_recover_startup_emits_rollback_audit_event_after_successful_recovery_rollback(
+    tmp_path: Path,
+) -> None:
+    controller, job_store, journal, primary_repo, job_id, _hash, _cb = (
+        _build_promote_scenario(tmp_path)
+    )
+    plugin_data = tmp_path / "data"
+    session_id = "sess-promote"
+    idempotency_key = f"promotion:{job_id}:1"
+    created_at = journal.timestamp()
+    repo_root_str = str(primary_repo)
+
+    journal.write_phase(
+        OperationJournalEntry(
+            idempotency_key=idempotency_key,
+            operation="promotion",
+            phase="intent",
+            collaboration_id="collab-promote-1",
+            created_at=created_at,
+            repo_root=repo_root_str,
+            job_id=job_id,
+        ),
+        session_id=session_id,
+    )
+    journal.write_phase(
+        OperationJournalEntry(
+            idempotency_key=idempotency_key,
+            operation="promotion",
+            phase="dispatched",
+            collaboration_id="collab-promote-1",
+            created_at=created_at,
+            repo_root=repo_root_str,
+            job_id=job_id,
+        ),
+        session_id=session_id,
+    )
+
+    persisted = job_store.get(job_id)
+    assert persisted is not None
+    diff_path = persisted.artifact_paths[0]
+    subprocess.run(
+        ["git", "-C", str(primary_repo), "apply", "--binary", diff_path],
+        check=True,
+        capture_output=True,
+    )
+    (primary_repo / "README.md").write_text("# Tampered\n", encoding="utf-8")
+
+    controller.recover_startup()
+
+    recovered = job_store.get(job_id)
+    assert recovered is not None
+    assert recovered.promotion_state == "rolled_back"
+    rollback_events = _rollback_audit_events(plugin_data)
+    assert len(rollback_events) == 1
+    assert rollback_events[0]["actor"] == "system"
+    assert rollback_events[0]["job_id"] == job_id
+    assert rollback_events[0]["collaboration_id"] == "collab-promote-1"
+    assert rollback_events[0]["runtime_id"] == "rt-promote-1"
+
+
+def test_recover_startup_backfills_missing_rollback_audit_event_for_rolled_back_job(
+    tmp_path: Path,
+) -> None:
+    controller, job_store, journal, primary_repo, job_id, _hash, _cb = (
+        _build_promote_scenario(tmp_path)
+    )
+    plugin_data = tmp_path / "data"
+    session_id = "sess-promote"
+    idempotency_key = f"promotion:{job_id}:1"
+    created_at = journal.timestamp()
+    repo_root_str = str(primary_repo)
+
+    journal.write_phase(
+        OperationJournalEntry(
+            idempotency_key=idempotency_key,
+            operation="promotion",
+            phase="intent",
+            collaboration_id="collab-promote-1",
+            created_at=created_at,
+            repo_root=repo_root_str,
+            job_id=job_id,
+        ),
+        session_id=session_id,
+    )
+    journal.write_phase(
+        OperationJournalEntry(
+            idempotency_key=idempotency_key,
+            operation="promotion",
+            phase="dispatched",
+            collaboration_id="collab-promote-1",
+            created_at=created_at,
+            repo_root=repo_root_str,
+            job_id=job_id,
+        ),
+        session_id=session_id,
+    )
+    job_store.update_promotion_state(
+        job_id,
+        promotion_state="rolled_back",
+        promotion_attempt=1,
+    )
+
+    controller.recover_startup()
+
+    rollback_events = _rollback_audit_events(plugin_data)
+    assert len(rollback_events) == 1
+    assert rollback_events[0]["job_id"] == job_id
+    unresolved = [
+        entry
+        for entry in journal.list_unresolved(session_id=session_id)
+        if entry.operation == "promotion"
+    ]
+    assert unresolved == []
+
+
+def test_recover_startup_ignores_malformed_audit_line_when_backfilling_rollback_event(
+    tmp_path: Path,
+) -> None:
+    controller, job_store, journal, primary_repo, job_id, _hash, _cb = (
+        _build_promote_scenario(tmp_path)
+    )
+    plugin_data = tmp_path / "data"
+    session_id = "sess-promote"
+    idempotency_key = f"promotion:{job_id}:1"
+    created_at = journal.timestamp()
+    repo_root_str = str(primary_repo)
+
+    journal.write_phase(
+        OperationJournalEntry(
+            idempotency_key=idempotency_key,
+            operation="promotion",
+            phase="intent",
+            collaboration_id="collab-promote-1",
+            created_at=created_at,
+            repo_root=repo_root_str,
+            job_id=job_id,
+        ),
+        session_id=session_id,
+    )
+    journal.write_phase(
+        OperationJournalEntry(
+            idempotency_key=idempotency_key,
+            operation="promotion",
+            phase="dispatched",
+            collaboration_id="collab-promote-1",
+            created_at=created_at,
+            repo_root=repo_root_str,
+            job_id=job_id,
+        ),
+        session_id=session_id,
+    )
+    job_store.update_promotion_state(
+        job_id,
+        promotion_state="rolled_back",
+        promotion_attempt=1,
+    )
+    audit_path = plugin_data / "audit" / "events.jsonl"
+    audit_path.parent.mkdir(parents=True, exist_ok=True)
+    audit_path.write_text("{not valid json}\n", encoding="utf-8")
+
+    controller.recover_startup()
+
+    rollback_events = _rollback_audit_events(plugin_data)
+    assert len(rollback_events) == 1
+    assert rollback_events[0]["job_id"] == job_id
+    unresolved = [
+        entry
+        for entry in journal.list_unresolved(session_id=session_id)
+        if entry.operation == "promotion"
+    ]
+    assert unresolved == []
+
+
+def test_recover_startup_does_not_duplicate_existing_rollback_audit_event(
+    tmp_path: Path,
+) -> None:
+    controller, job_store, journal, primary_repo, job_id, _hash, _cb = (
+        _build_promote_scenario(tmp_path)
+    )
+    plugin_data = tmp_path / "data"
+    session_id = "sess-promote"
+    idempotency_key = f"promotion:{job_id}:1"
+    created_at = journal.timestamp()
+    repo_root_str = str(primary_repo)
+
+    journal.write_phase(
+        OperationJournalEntry(
+            idempotency_key=idempotency_key,
+            operation="promotion",
+            phase="intent",
+            collaboration_id="collab-promote-1",
+            created_at=created_at,
+            repo_root=repo_root_str,
+            job_id=job_id,
+        ),
+        session_id=session_id,
+    )
+    journal.write_phase(
+        OperationJournalEntry(
+            idempotency_key=idempotency_key,
+            operation="promotion",
+            phase="dispatched",
+            collaboration_id="collab-promote-1",
+            created_at=created_at,
+            repo_root=repo_root_str,
+            job_id=job_id,
+        ),
+        session_id=session_id,
+    )
+    job_store.update_promotion_state(
+        job_id,
+        promotion_state="rolled_back",
+        promotion_attempt=1,
+    )
+    journal.append_audit_event(
+        AuditEvent(
+            event_id="evt-existing-rollback",
+            timestamp=journal.timestamp(),
+            actor="system",
+            action="rollback",
+            collaboration_id="collab-promote-1",
+            runtime_id="rt-promote-1",
+            job_id=job_id,
+        )
+    )
+
+    controller.recover_startup()
+
+    rollback_events = _rollback_audit_events(plugin_data)
+    assert len(rollback_events) == 1
+
+
 def test_recover_startup_normalizes_promotion_intent_to_pending(
     tmp_path: Path,
 ) -> None:
@@ -3691,6 +3947,7 @@ def test_recover_startup_leaves_unresolved_when_rollback_fails(
         f"Expected 'rollback_needed' but got {recovered.promotion_state!r}. "
         "Failed rollback must not claim success."
     )
+    assert _rollback_audit_events(tmp_path / "data") == []
 
 
 def test_recover_startup_suspends_rollback_when_user_edits_tracked_file(

@@ -1934,6 +1934,37 @@ class DelegationController:
             detail=detail,
         )
 
+    def _append_rollback_audit_event(self, *, job: DelegationJob, job_id: str) -> None:
+        self._journal.append_audit_event(
+            AuditEvent(
+                event_id=self._uuid_factory(),
+                timestamp=self._journal.timestamp(),
+                actor="system",
+                action="rollback",
+                collaboration_id=job.collaboration_id,
+                runtime_id=job.runtime_id,
+                job_id=job_id,
+            )
+        )
+
+    def _has_rollback_audit_event(self, *, job_id: str) -> bool:
+        audit_path = self._plugin_data_path / "audit" / "events.jsonl"
+        if not audit_path.exists():
+            return False
+        # Invalid UTF-8 is owned by startup prune/quarantine before recovery
+        # runs. This helper only needs record-local malformed JSON tolerance
+        # once that precondition holds.
+        for line in audit_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if payload.get("action") == "rollback" and payload.get("job_id") == job_id:
+                return True
+        return False
+
     def promote(self, *, job_id: str) -> PromotionResult | PromotionRejectedResponse:
         """Apply the reviewed diff from a completed delegation to the primary workspace.
 
@@ -2229,6 +2260,7 @@ class DelegationController:
                 promotion_state="rolled_back",
                 promotion_attempt=new_attempt,
             )
+            self._append_rollback_audit_event(job=job, job_id=job_id)
 
             # Journal completed phase for rollback.
             self._journal.write_phase(
@@ -3048,7 +3080,13 @@ class DelegationController:
                 # Mutation may have happened — re-verify in the primary workspace.
                 if entry.job_id is not None:
                     job = self._job_store.get(entry.job_id)
-                    if job is not None and job.promotion_state not in (
+                    if job is not None and job.promotion_state == "rolled_back":
+                        if not self._has_rollback_audit_event(job_id=entry.job_id):
+                            self._append_rollback_audit_event(
+                                job=job,
+                                job_id=entry.job_id,
+                            )
+                    elif job is not None and job.promotion_state not in (
                         "verified",
                         "discarded",
                         "rolled_back",
@@ -3155,6 +3193,10 @@ class DelegationController:
                                 self._job_store.update_promotion_state(
                                     entry.job_id,
                                     promotion_state="rolled_back",
+                                )
+                                self._append_rollback_audit_event(
+                                    job=job,
+                                    job_id=entry.job_id,
                                 )
 
             # Advance journal to completed.

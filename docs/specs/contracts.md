@@ -217,6 +217,7 @@ Richer analytics and provenance fields (artifact hashes, terminal statuses, work
 | `deny` | execution | `claude` | Escalation resolved with `decision="deny"` |
 | `escalate` | execution | `claude` | Escalation surfaced to Claude |
 | `promote` | execution | `claude` | Promotion completed successfully |
+| `rollback` | execution | `system` | Promotion rollback completed after post-apply verification failed. Carries `job_id`. |
 | `discard` | execution | `claude` | Result discarded |
 | `approval_timeout` | execution | `system` | Server request timed out without resolution. Carries `job_id` and `request_id`. |
 | `internal_abort` | execution | `system` | Parked server request aborted internally (e.g., job cancellation while waiting for operator decision). Carries `job_id` and `request_id`. |
