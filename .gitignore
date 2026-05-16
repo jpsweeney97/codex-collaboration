@@ -38,6 +38,9 @@ tmp/
 # Design review workspace (transient artifacts from /design-review-team)
 .design-review-workspace/
 
+# Tech debt audit workspace (transient artifacts from /tech-debt-audit)
+.tech-debt-audit-workspace/
+
 # Local secrets / settings overrides
 .env
 .env.local
