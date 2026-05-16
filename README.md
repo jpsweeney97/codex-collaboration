@@ -112,7 +112,7 @@ Dialogue state (lineage, journal, turn metadata) is session-scoped. The session 
 
 ## Safety Substrate
 
-The plugin enforces a fail-closed credential scanning chain on all content-bearing advisory tool calls (`codex.consult`, `codex.dialogue.start`, `codex.dialogue.reply`):
+The plugin enforces a fail-closed credential scanning chain on all content-bearing Codex collaboration tool calls (`codex.consult`, `codex.dialogue.start`, `codex.dialogue.reply`, `codex.delegate.start`, `codex.delegate.decide`):
 
 - **Hook guard** (`scripts/codex_guard.py`): `PreToolUse` hook validates raw tool input before the MCP server processes it. Exits 2 (block) on parse failure, malformed input, or internal error.
 - **Tool-input safety policy** (`server/consultation_safety.py`): Per-tool scan policies with field-aware traversal and tiered credential scanning.

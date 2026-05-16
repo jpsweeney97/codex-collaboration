@@ -95,3 +95,4 @@ Session handoffs live in `docs/handoffs/`. Older handoffs migrate to `docs/hando
 - Prefer editing existing files to creating new ones.
 - Don't add `__pycache__`, `.pytest_cache`, `.ruff_cache`, or `.mypy_cache` to git — they are gitignored.
 - When a change touches MCP tool names, hook matchers, or skill frontmatter, verify all three locations stay in sync.
+- When a commit changes post-extraction project state, update `docs/status/current-state.md` and `docs/status/reconciliation-register.md` in the same branch or explicitly state why no status-layer change is needed.

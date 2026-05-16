@@ -5,7 +5,7 @@ Use this file for open or unreconciled work.
 Start at [Current State](./current-state.md) for project orientation,
 implemented-now surface, authority ownership, and reader routing.
 
-Last reconciled: 2026-04-30
+Last reconciled: 2026-05-16
 
 ## Authority
 
@@ -48,20 +48,36 @@ Scope included here:
 
 ## Current Priority Order
 
-1. Close `T-20260429-01` by recording closure evidence for the three
+1. Execute or explicitly disposition the tech-debt audit remediation plan from
+   `docs/superpowers/plans/2026-05-16-codex-collaboration-debt-repair.md`,
+   preserving the HL2 -> HL1 -> HL5 ordering for Codex App Server contract
+   work.
+2. Close `T-20260429-01` by recording closure evidence for the three
    unchecked acceptance criteria: comparable `/delegate` smoke with
    avoidable sandbox-friction escalations <=2 (AC #1); credential-boundary
    probe (AC #2); `test_runtime.py` regression assertion updated and full
    codex-collaboration test suite passing (AC #3). Phase 1 implementation
    has landed on `main` (`runtime.py:111-114`). Count legitimate
    operator-gated approvals separately.
-2. Classify or intentionally safe-terminalize the currently unsupported App
+3. Classify or intentionally safe-terminalize the currently unsupported App
    Server request kinds tracked by `T-20260429-02`.
-3. Sweep residual typing and minor Packet 1 carry-forward debt (`TT.1`,
+4. Sweep residual typing and minor Packet 1 carry-forward debt (`TT.1`,
    `RT.1`, `P1-MINOR-SWEEP`).
-4. Convert `BMARK-L1-L3` into explicit follow-up tickets or deliberately
+5. Convert `BMARK-L1-L3` into explicit follow-up tickets or deliberately
    decline those L1/L2/L3 items as non-goals.
-5. Specify or explicitly defer `AUDIT-CONSUMER-INTERFACE`.
+6. Specify or explicitly defer `AUDIT-CONSUMER-INTERFACE`.
+
+## Audit-Owned Active Work
+
+| ID | State | Owning artifact | Current truth | Exit condition |
+|---|---|---|---|---|
+| `DEBT-20260515` | `open` | `docs/audits/2026-05-15-codex-collaboration-debt.md` and `docs/superpowers/plans/2026-05-16-codex-collaboration-debt-repair.md` | The 2026-05-15 debt audit found no P0s and four P1s, with the strongest systemic cluster around unmanaged Codex CLI contract/version drift. Quick wins are bounded, but Codex wire-contract work must follow the sequence HL2 -> HL1 -> HL5 before version-pin upgrade execution. | Each quick win is either landed or explicitly declined; HL2, HL1, and HL5 have passing verification; ST2 has a tracked upgrade artifact or is deliberately downgraded with evidence. |
+
+## Audit-Owned Deferred Watch Rows
+
+| ID | State | Owning artifact | Current truth | Watch trigger |
+|---|---|---|---|---|
+| `WL3-LAYERING-CI-ASSERT` | `deferred` | `docs/audits/2026-05-15-codex-collaboration-debt.md` | The scripts->server layering invariant is now documented in `foundations.md` (QW8/Task 2). The optional CI guard (`rg "from scripts\." server/` -> fail on match) is not yet wired. | At next contributor onboarding, or when a reverse import is first attempted, add the CI assertion. |
 
 ## Ticket-Owned Active Work
 
