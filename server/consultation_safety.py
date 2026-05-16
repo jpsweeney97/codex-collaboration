@@ -12,6 +12,7 @@ from typing import Literal
 
 from .credential_scan import scan_text
 from .secret_taxonomy import Tier
+from .tool_prefix import TOOL_PREFIX
 
 _NODE_CAP = 10_000
 _CHAR_CAP = 256 * 1024
@@ -72,15 +73,19 @@ DELEGATE_DISCARD_POLICY = ToolScanPolicy(
     content_fields=frozenset(),
 )
 
+# Non-content-bearing delegate policies are intentionally present even when the
+# hook matcher does not invoke the guard for those tools. They keep policy lookup
+# total for all plugin tool names and preserve fail-closed behavior if the matcher
+# is widened later.
 _TOOL_POLICY_MAP: dict[str, ToolScanPolicy] = {
-    "mcp__plugin_codex-collaboration_codex-collaboration__codex.consult": CONSULT_POLICY,
-    "mcp__plugin_codex-collaboration_codex-collaboration__codex.dialogue.start": DIALOGUE_START_POLICY,
-    "mcp__plugin_codex-collaboration_codex-collaboration__codex.dialogue.reply": DIALOGUE_REPLY_POLICY,
-    "mcp__plugin_codex-collaboration_codex-collaboration__codex.delegate.start": DELEGATE_START_POLICY,
-    "mcp__plugin_codex-collaboration_codex-collaboration__codex.delegate.decide": DELEGATE_DECIDE_POLICY,
-    "mcp__plugin_codex-collaboration_codex-collaboration__codex.delegate.poll": DELEGATE_POLL_POLICY,
-    "mcp__plugin_codex-collaboration_codex-collaboration__codex.delegate.promote": DELEGATE_PROMOTE_POLICY,
-    "mcp__plugin_codex-collaboration_codex-collaboration__codex.delegate.discard": DELEGATE_DISCARD_POLICY,
+    f"{TOOL_PREFIX}codex.consult": CONSULT_POLICY,
+    f"{TOOL_PREFIX}codex.dialogue.start": DIALOGUE_START_POLICY,
+    f"{TOOL_PREFIX}codex.dialogue.reply": DIALOGUE_REPLY_POLICY,
+    f"{TOOL_PREFIX}codex.delegate.start": DELEGATE_START_POLICY,
+    f"{TOOL_PREFIX}codex.delegate.decide": DELEGATE_DECIDE_POLICY,
+    f"{TOOL_PREFIX}codex.delegate.poll": DELEGATE_POLL_POLICY,
+    f"{TOOL_PREFIX}codex.delegate.promote": DELEGATE_PROMOTE_POLICY,
+    f"{TOOL_PREFIX}codex.delegate.discard": DELEGATE_DISCARD_POLICY,
 }
 
 

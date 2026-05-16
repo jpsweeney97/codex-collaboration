@@ -21,7 +21,7 @@ _PACKAGE_ROOT = Path(__file__).resolve().parent.parent
 if str(_PACKAGE_ROOT) not in sys.path:
     sys.path.insert(0, str(_PACKAGE_ROOT))
 
-_TOOL_PREFIX = "mcp__plugin_codex-collaboration_codex-collaboration__"
+from server.tool_prefix import TOOL_PREFIX as _TOOL_PREFIX  # noqa: E402
 
 
 def main() -> int:

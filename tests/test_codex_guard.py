@@ -42,6 +42,47 @@ def _run_hook(tool_name: str, tool_input: dict) -> subprocess.CompletedProcess:
     )
 
 
+def test_guard_prefix_matches_policy_map_prefix() -> None:
+    module = _load_guard_module()
+    from server.consultation_safety import _TOOL_POLICY_MAP
+    from server.tool_prefix import TOOL_PREFIX
+
+    assert module._TOOL_PREFIX == TOOL_PREFIX
+    assert all(tool_name.startswith(TOOL_PREFIX) for tool_name in _TOOL_POLICY_MAP)
+
+
+def test_non_plugin_tool_passes_through_without_policy_import(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_guard_module()
+    payload = json.dumps(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Read",
+            "tool_input": {"file_path": "/tmp/example.txt"},
+            "session_id": "test-session",
+        }
+    )
+
+    original_import = __import__
+
+    def guarded_import(
+        name: str,
+        globals: object | None = None,
+        locals: object | None = None,
+        fromlist: tuple[str, ...] = (),
+        level: int = 0,
+    ) -> object:
+        if name == "server.consultation_safety":
+            raise ImportError("policy import should not run for non-plugin tools")
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(module.sys, "stdin", io.StringIO(payload))
+    monkeypatch.setattr("builtins.__import__", guarded_import)
+
+    assert module.main() == 0
+
+
 class TestHookAllowsCleanInput:
     def test_consult_with_clean_objective(self) -> None:
         result = _run_hook(
