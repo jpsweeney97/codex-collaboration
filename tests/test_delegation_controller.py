@@ -1571,9 +1571,10 @@ def test_start_post_turn_finalization_failure_marks_job_unknown_and_cleans_up(
             break
         time.sleep(0.05)
 
-    assert final_job is not None
+    assert final_job is not None, "job missing after bounded poll; job_id='job-1'"
     assert final_job.status == "unknown", (
-        f"Expected job status 'unknown' but got {final_job.status!r}"
+        f"Expected job status 'unknown' but got {final_job.status!r}; "
+        f"final_job={final_job!r}"
     )
 
     # Wait for worker thread to finish.
@@ -1775,8 +1776,8 @@ def test_decide_approve_resumes_runtime_and_returns_completed_result(
             break
         time.sleep(0.05)
 
-    assert final_job is not None
-    assert final_job.status == "completed"
+    assert final_job is not None, "job missing after bounded poll; job_id='job-1'"
+    assert final_job.status == "completed", f"final_job={final_job!r}"
 
     # Step 3: pending request resolved
     stored_req = prs.get("42")
@@ -1943,8 +1944,8 @@ def test_decide_deny_marks_job_completed_and_closes_runtime(tmp_path: Path) -> N
             break
         time.sleep(0.05)
 
-    assert final_job is not None
-    assert final_job.status == "completed"
+    assert final_job is not None, "job missing after bounded poll; job_id='job-1'"
+    assert final_job.status == "completed", f"final_job={final_job!r}"
 
     # Pending request resolved
     stored_req = prs.get("42")
@@ -2008,8 +2009,8 @@ def test_decide_deny_emits_terminal_outcome(tmp_path: Path) -> None:
             break
         time.sleep(0.05)
 
-    assert final_job is not None
-    assert final_job.status == "completed"
+    assert final_job is not None, "job missing after bounded poll; job_id='job-1'"
+    assert final_job.status == "completed", f"final_job={final_job!r}"
 
     # Wait for worker thread
     worker_threads = [
