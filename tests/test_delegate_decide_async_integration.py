@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from jsonschema.validators import validator_for
 
 from server.delegation_controller import DelegationController
 from server.models import (
@@ -130,6 +131,13 @@ def _wait_for_matching_respond_calls(
             if str(rid) == request_id
         ]
     return matching
+
+
+def _assert_schema_valid(schema: dict[str, Any], payload: dict[str, Any]) -> None:
+    cls = validator_for(schema)
+    cls.check_schema(schema)
+    errors = sorted(cls(schema).iter_errors(payload), key=lambda err: list(err.path))
+    assert errors == [], f"payload invalid: {errors}"
 
 
 # ---------------------------------------------------------------------------
@@ -664,6 +672,7 @@ def test_decide_audit_event_post_commit_non_gating(
 )
 def test_decide_worker_dispatches_l4_payload_end_to_end(
     tmp_path: Path,
+    schema_loader,
     kind: str,
     decision: str,
     answers: dict[str, tuple[str, ...]] | None,
@@ -723,6 +732,11 @@ def test_decide_worker_dispatches_l4_payload_end_to_end(
         f"{expected_payload!r} for {decision!r} × {kind!r}, got "
         f"{dispatched_payload!r}"
     )
+    schema_name = {
+        "command_approval": "CommandExecutionRequestApprovalResponse.json",
+        "request_user_input": "ToolRequestUserInputResponse.json",
+    }[kind]
+    _assert_schema_valid(schema_loader(schema_name), dispatched_payload)
 
 
 # ---------------------------------------------------------------------------

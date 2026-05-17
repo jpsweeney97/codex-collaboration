@@ -62,6 +62,19 @@ def client_request_schema(vendored_schema_dir: Path) -> Path:
     return path
 
 
+@pytest.fixture
+def schema_loader(vendored_schema_dir: Path):
+    def load(name: str) -> dict:
+        path = vendored_schema_dir / name
+        if not path.exists():
+            pytest.skip(f"{name} not found in vendored schema")
+        import json
+
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    return load
+
+
 from server.models import CollaborationHandle  # noqa: E402
 
 
