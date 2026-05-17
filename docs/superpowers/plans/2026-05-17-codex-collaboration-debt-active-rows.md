@@ -96,9 +96,11 @@ Expected final state: full marker-inclusive pytest passes, ruff passes, no white
 - Stop if Phase 2's mini-design requires changing the `AuditEvent` schema instead of using contract-valid existing fields. Patch the design/spec first and review before implementation.
 - Stop if Phase 2 cannot name a concrete `crash` emission path with tests. Either patch the design to include a real crash locus or split crash emission into a named residual row and keep `DEBT-20260517-HL2-CRASH-RESTART-AUDIT` open.
 - Stop if Phase 2 cannot name the duplicate-prevention owner and recovery idempotency key before source work starts.
+- Stop if Phase 2's duplicate-prevention model only handles `OperationJournalEntry`-backed recovery. Delegation orphaned-active-job recovery has no journal replay anchor, so it needs an explicit crash/restart subject key or a named residual row.
 - Stop if Phase 2 cannot prevent duplicate `restart` events across eager `startup()` and lazy `_ensure_*_controller()` recovery paths.
 - Stop if QW3's version-surface item changes the intended public plugin version rather than only aligning stale surfaces. Route the version decision through `T-20260516-01`.
 - Stop if Phase 4's proposed seam is read-only only. HL4 requires both observation and behavior/protocol seams; a snapshot alone is not closure.
+- Stop if Phase 4 cannot migrate `tests/test_delegate_decide_async_integration.py::test_decide_writes_intent_before_commit_signal_ordering` without assigning to `controller._registry.commit_signal`. Add a registry protocol/fake seam first.
 
 ---
 
@@ -123,6 +125,7 @@ Expected final state: full marker-inclusive pytest passes, ruff passes, no white
   - `main()` calls a bootstrap logging configuration helper before startup work emits INFO/WARNING records.
   - `CODEX_COLLAB_LOG_LEVEL=INFO` makes an INFO record for the resolved `plugin_data_path` visible.
   - an invalid `CODEX_COLLAB_LOG_LEVEL` falls back to `WARNING` and does not crash startup.
+  - logging configuration still works when the root logger already has a handler from a previous import/test, so the helper does not rely on `logging.basicConfig(...)` doing work in the happy path only.
 
   Run:
 
@@ -143,6 +146,8 @@ Expected final state: full marker-inclusive pytest passes, ruff passes, no white
   def _configure_logging() -> None:
       raw_level = os.environ.get(_LOG_LEVEL_ENV, "WARNING").upper()
       level = logging.getLevelNamesMapping().get(raw_level, logging.WARNING)
+      root_logger = logging.getLogger()
+      root_logger.setLevel(level)
       logging.basicConfig(
           level=level,
           format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -153,6 +158,8 @@ Expected final state: full marker-inclusive pytest passes, ruff passes, no white
               raw_level,
           )
   ```
+
+  If tests prove `logging.basicConfig(...)` is a no-op under the existing pytest/root-handler setup, replace or update the root handler explicitly inside `_configure_logging()` instead of weakening the test. The invariant is that the env var controls bootstrap visibility on repeated in-process imports and on a fresh subprocess launch.
 
   Then make `main()` start with:
 
@@ -321,6 +328,7 @@ Expected final state: full marker-inclusive pytest passes, ruff passes, no white
   - whether `restart` means process startup, controller recovery execution, or actual reconciliation of unresolved records
   - which code path owns each event
   - which concrete `crash` trigger is implemented in this phase and which test proves normal shutdown does not emit a false `crash`
+  - how delegation orphaned active jobs are audited when `job_creation` is already completed and recovery has no unresolved `OperationJournalEntry`
 
   Required default unless the design rejects it with evidence:
 
@@ -331,7 +339,7 @@ Expected final state: full marker-inclusive pytest passes, ruff passes, no white
   Recovery-time crash detection is valid only when the event records detected_during="startup_recovery"; it must not pretend to know the original crash timestamp.
   ```
 
-  If the design leaves all crash emission out of scope, immediately create or name a residual row for crash emission and do not close `DEBT-20260517-HL2-CRASH-RESTART-AUDIT` in this phase.
+  If the design leaves all crash emission out of scope, immediately create or name a residual row for crash emission and do not close `DEBT-20260517-HL2-CRASH-RESTART-AUDIT` in this phase. If it leaves delegation orphaned-active-job recovery out of scope, name that residual separately and keep HL2 open or re-route it by name.
 
 - [ ] **Step 2: Decide identity shape**
 
@@ -349,6 +357,7 @@ Expected final state: full marker-inclusive pytest passes, ruff passes, no white
   - lazy `_ensure_dialogue_controller()`
   - lazy `_ensure_delegation_controller()`
   - retry after failed lazy recovery
+  - delegation orphaned-active-job recovery, where the job is `running` or `needs_escalation` but the `job_creation` journal entry is already `completed`
 
   Required invariant: the same unresolved recovery item cannot produce duplicate `restart` events in one process.
 
@@ -356,9 +365,14 @@ Expected final state: full marker-inclusive pytest passes, ruff passes, no white
 
   ```text
   Recovery owners emit audit events only after the local reconciliation writes for
-  one recovery item succeed. The audit idempotency key is:
+  one recovery item succeed. For unresolved journal entries, the audit
+  idempotency key is:
 
       f"{entry.operation}:{entry.idempotency_key}:{action}"
+
+  For delegation orphaned-active-job recovery, the audit idempotency key is:
+
+      f"orphaned_active_job:{job.job_id}:{action}"
 
   where action is "crash" or "restart".
   ```
@@ -385,6 +399,7 @@ Expected final state: full marker-inclusive pytest passes, ruff passes, no white
   recovery_key: action-specific idempotency key for duplicate suppression
   recovery_operation: operation journal operation that was reconciled
   recovery_phase: latest unresolved phase seen before reconciliation
+  recovery_subject: "operation_journal" or "orphaned_active_job"
   detected_during: "startup_recovery" for crash records inferred during recovery
   ```
 
@@ -403,6 +418,7 @@ Expected final state: full marker-inclusive pytest passes, ruff passes, no white
   Add tests proving:
   - emitted events are `AuditEvent(action="crash")` or `AuditEvent(action="restart")`, not dicts with `type`
   - the chosen concrete crash trigger emits `action="crash"` with a real `collaboration_id` and `runtime_id`, or the phase explicitly creates a residual row and keeps HL2 open
+  - delegation orphaned-active-job recovery emits the chosen crash/restart records for a persisted `running` or `needs_escalation` job whose `job_creation` journal is already `completed`, or the design explicitly creates a residual row and keeps HL2 open
   - normal shutdown / clean startup does not emit a false `crash`
   - normal startup with no unresolved recovery does not emit `restart`
   - recovery that runs through eager and lazy call paths does not duplicate `restart`
@@ -412,14 +428,14 @@ Expected final state: full marker-inclusive pytest passes, ruff passes, no white
   Run:
 
   ```bash
-  uv run pytest tests/test_journal.py tests/test_mcp_server.py -q
+  uv run pytest tests/test_journal.py tests/test_mcp_server.py tests/test_delegation_controller.py -q
   ```
 
   Expected before implementation: new tests fail because no crash/restart events are emitted.
 
 - [ ] **Step 2: Implement event helpers**
 
-  Prefer small helpers near the recovery owner rather than broad framework code. Any helper that appends an audit event must construct:
+  Prefer small helpers near the recovery owner rather than broad framework code. For journal-backed recovery, any helper that appends an audit event must construct:
 
   ```python
   recovery_key = f"{entry.operation}:{entry.idempotency_key}:restart"
@@ -435,9 +451,12 @@ Expected final state: full marker-inclusive pytest passes, ruff passes, no white
           "recovery_key": recovery_key,
           "recovery_operation": entry.operation,
           "recovery_phase": entry.phase,
+          "recovery_subject": "operation_journal",
       },
   )
   ```
+
+  For delegation orphaned-active-job recovery, construct the same `AuditEvent` shape with `recovery_key = f"orphaned_active_job:{job.job_id}:restart"` and `extra["recovery_subject"] = "orphaned_active_job"`. Do not fake an `OperationJournalEntry` for that path; the lack of a journal replay anchor is the reason this path needs an explicit subject key.
 
   Use `journal.append_recovery_audit_event_once(event, recovery_key=recovery_key)`. Do not append raw dictionaries. Do not use `journal.append_audit_event(event)` directly for recovery crash/restart events unless the design proves another dedupe owner.
 
@@ -462,7 +481,7 @@ Expected final state: full marker-inclusive pytest passes, ruff passes, no white
   git diff --check
   ```
 
-  Expected: selected tests pass, full marker-inclusive pytest passes, full ruff passes, specs and source agree on the event shape, a concrete crash path and a concrete restart path are both covered or explicitly split, and the register row is not closed unless both implemented surfaces match the design.
+  Expected: selected tests pass, full marker-inclusive pytest passes, full ruff passes, specs and source agree on the event shape, journal-backed recovery and delegation orphaned-active-job recovery are both covered or explicitly split, a concrete crash path and a concrete restart path are both covered or explicitly split, and the register row is not closed unless all implemented surfaces match the design.
 
 ---
 
@@ -516,8 +535,10 @@ Expected final state: full marker-inclusive pytest passes, ruff passes, no white
 
   ```yaml
       - name: Audit Python dependencies
-        run: uv run --with pip-audit pip-audit
+        run: uv run --with pip-audit==2.10.0 pip-audit
   ```
+
+  Pin the scanner version in the CI command so the new gate is reviewable and repeatable. If a newer version is chosen during implementation, update both the CI command and the verification command below in the same patch and state the reason in the PR body.
 
   Create `.github/dependabot.yml`:
 
@@ -579,12 +600,13 @@ Expected final state: full marker-inclusive pytest passes, ruff passes, no white
   ```bash
   uv run pytest tests/test_projection_helpers.py tests/test_codex_guard.py -q
   uv run ruff check .
+  uv run --with pip-audit==2.10.0 pip-audit
   uv run python -c 'import pathlib, yaml; yaml.safe_load(pathlib.Path(".github/dependabot.yml").read_text())'
   uv run pytest tests -q -m ""
   git diff --check
   ```
 
-  Expected: selected tests pass, full marker-inclusive pytest passes, full ruff passes, Dependabot YAML parses, and the PR body itemizes every QW3 subitem as closed, split, or declined.
+  Expected: selected tests pass, full marker-inclusive pytest passes, full ruff passes, the pinned pip-audit command exits cleanly or produces an explicitly handled vulnerability finding, Dependabot YAML parses, and the PR body itemizes every QW3 subitem as closed, split, or declined.
 
 ---
 
@@ -650,9 +672,11 @@ Expected final state: full marker-inclusive pytest passes, ruff passes, no white
   Add constructor parameters with production defaults:
 
   ```python
-  resolution_registry: ResolutionRegistry | None = None,
+  resolution_registry: ResolutionRegistryLike | None = None,
   pending_escalation_projector: Callable[[DelegationJob], PendingEscalationView | None] | None = None,
   ```
+
+  Define `ResolutionRegistryLike` as a narrow protocol covering every registry method the controller calls, including `open_capture_channel`, `wait_for_parked`, `announce_*`, `signal_internal_abort`, `reserve`, `abort_reservation`, `commit_signal`, and `discard`. If extracting that protocol belongs better in `server/resolution_registry.py`, modify that file in this phase and keep the protocol exported for tests.
 
   In `__init__`:
 
@@ -668,7 +692,7 @@ Expected final state: full marker-inclusive pytest passes, ruff passes, no white
       return self._pending_escalation_projector(job)
   ```
 
-  This supports projection-null, projection-raises, registry abort, reservation contention, and commit-ordering tests without mutating private attributes after construction.
+  This supports projection-null, projection-raises, registry abort, reservation contention, and commit-ordering tests without mutating private attributes after construction. For commit-ordering coverage, use a recording fake registry passed through `resolution_registry=...`; do not assign to `controller._registry.commit_signal`.
 
 - [ ] **Step 4: Migrate representative tests**
 
@@ -678,7 +702,7 @@ Expected final state: full marker-inclusive pytest passes, ruff passes, no white
   - `tests/test_delegate_start_async_integration.py` projection-raises path
   - `tests/test_delegate_decide_async_integration.py::test_decide_writes_intent_before_commit_signal_ordering`
 
-  New test construction should pass fakes through constructor parameters instead of using `object.__setattr__` or assigning to `controller._registry.commit_signal`.
+  New test construction should pass fakes through constructor parameters instead of using `object.__setattr__` or assigning to `controller._registry.commit_signal`. The commit-ordering test must assert the same `intent` before `commit_signal` invariant through the injected registry fake; do not count it migrated if it still mutates the concrete registry after controller construction.
 
   If Phase 1 left no existing observation-coupled test suitable for migration, add `tests/test_delegation_controller_test_seams.py::test_snapshot_for_test_reports_tracked_and_alive_worker_names`. That fallback is acceptable only if the PR body states that it adds observation coverage rather than migrating an existing observation assertion.
 
@@ -694,7 +718,7 @@ Expected final state: full marker-inclusive pytest passes, ruff passes, no white
   git diff --check
   ```
 
-  Expected: selected tests pass, full marker-inclusive pytest passes, full ruff passes, at least one observation-coupled test and one behavior/protocol-coupled test now use supported seams.
+  Expected: selected tests pass, full marker-inclusive pytest passes, full ruff passes, at least one observation-coupled test and one behavior/protocol-coupled test now use supported seams, and the named commit-ordering test no longer assigns to `controller._registry.commit_signal`.
 
 ---
 
@@ -704,9 +728,9 @@ Before each phase PR is ready for review, update `docs/status/reconciliation-reg
 
 - Close `DEBT-20260517-QW1-LOGGING` only after README documents the env var and bootstrap tests prove logging configuration.
 - Close `DEBT-20260517-QW2-DRAIN-WORKERS` only after tests use `drain_workers()` instead of process-wide worker enumeration for migrated teardown paths.
-- Close `DEBT-20260517-HL2-CRASH-RESTART-AUDIT` only after the mini-design, specs, source, and tests agree on emitted event shape, duplicate-prevention behavior, a concrete crash path, and a concrete restart path. If crash emission is split out, keep this row open or re-route it by name.
+- Close `DEBT-20260517-HL2-CRASH-RESTART-AUDIT` only after the mini-design, specs, source, and tests agree on emitted event shape, duplicate-prevention behavior, a concrete crash path, a concrete restart path, and the delegation orphaned-active-job recovery path. If crash emission or orphaned-active-job audit emission is split out, keep this row open or re-route it by name.
 - Close `DEBT-20260517-QW3-HYGIENE` only after every QW3 bullet is closed, split, or declined by name.
-- Close `DEBT-20260517-HL4-DELEGATION-TEST-SEAMS` only after both observation and behavior/protocol seams exist and representative tests migrate to them. At least one observation-coupled test and one behavior/protocol-coupled test must use supported seams.
+- Close `DEBT-20260517-HL4-DELEGATION-TEST-SEAMS` only after both observation and behavior/protocol seams exist and representative tests migrate to them. At least one observation-coupled test and one behavior/protocol-coupled test must use supported seams, and the commit-ordering test must use an injected registry fake or protocol-backed seam rather than mutating the concrete registry.
 
 ## Self-Review Notes
 
