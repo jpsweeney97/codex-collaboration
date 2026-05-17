@@ -134,6 +134,7 @@ The plugin reads the following environment variables at module load. Plugin rest
 | Variable | Default | Description |
 |---|---|---|
 | `CODEX_COLLAB_APPROVAL_OPERATOR_WINDOW_SECONDS` | `900` (15 min) | TTL for parked approval requests in `command_approval` and `file_change` flows. Operator decides arriving after this window are rejected as `job_not_awaiting_decision`. Must be a positive number; non-numeric or non-positive values fall back to the default with a warning logged. Useful for diagnostic-style operator workflows that exceed the default budget under per-cycle review tempo. |
+| `CODEX_COLLAB_LOG_LEVEL` | `WARNING` | Root logging level for the bootstrap process. Use `INFO` for startup diagnostics such as the resolved plugin data path; invalid values fall back to `WARNING`. |
 
 ## Tests
 

@@ -271,6 +271,85 @@ def _build_controller(
     )
 
 
+def test_start_tracks_finished_worker_thread_for_drain(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    controller, *_ = _build_controller(tmp_path)
+
+    def fake_spawn_worker(**kwargs: Any) -> threading.Thread:
+        registry = kwargs["registry"]
+        job_id = kwargs["job_id"]
+        thread = threading.Thread(
+            target=lambda: None,
+            name=f"delegation-worker-{job_id}",
+        )
+        thread.start()
+        registry.announce_turn_completed_empty(job_id)
+        return thread
+
+    monkeypatch.setattr(
+        "server.delegation_controller.spawn_worker",
+        fake_spawn_worker,
+    )
+
+    controller.start(repo_root=repo_root, objective="Finish quickly")
+
+    drain = controller.drain_workers(timeout=1.0)
+    assert drain.joined_thread_names == ("delegation-worker-job-1",)
+    assert drain.alive_thread_names == ()
+
+    second_drain = controller.drain_workers(timeout=0.01)
+    assert second_drain.joined_thread_names == ()
+    assert second_drain.alive_thread_names == ()
+
+
+def test_drain_workers_reports_alive_threads_without_unblocking_them(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    controller, *_ = _build_controller(tmp_path)
+    release_worker = threading.Event()
+    spawned_threads: list[threading.Thread] = []
+
+    def fake_spawn_worker(**kwargs: Any) -> threading.Thread:
+        registry = kwargs["registry"]
+        job_id = kwargs["job_id"]
+        thread = threading.Thread(
+            target=release_worker.wait,
+            name=f"delegation-worker-{job_id}",
+        )
+        thread.start()
+        spawned_threads.append(thread)
+        registry.announce_turn_completed_empty(job_id)
+        return thread
+
+    monkeypatch.setattr(
+        "server.delegation_controller.spawn_worker",
+        fake_spawn_worker,
+    )
+
+    controller.start(repo_root=repo_root, objective="Stay alive briefly")
+
+    try:
+        drain = controller.drain_workers(timeout=0.01)
+        assert drain.joined_thread_names == ()
+        assert drain.alive_thread_names == ("delegation-worker-job-1",)
+
+        release_worker.set()
+        final_drain = controller.drain_workers(timeout=1.0)
+        assert final_drain.joined_thread_names == ("delegation-worker-job-1",)
+        assert final_drain.alive_thread_names == ()
+    finally:
+        release_worker.set()
+        for thread in spawned_threads:
+            thread.join(timeout=1.0)
+
+
 def test_start_creates_worktree_runtime_and_persists_job(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
@@ -1584,12 +1663,9 @@ def test_start_post_turn_finalization_failure_marks_job_unknown_and_cleans_up(
         f"final_job={final_job!r}"
     )
 
-    # Wait for worker thread to finish.
-    worker_threads = [
-        t for t in threading.enumerate() if t.name == "delegation-worker-job-1"
-    ]
-    for t in worker_threads:
-        t.join(timeout=5.0)
+    # Wait for tracked worker thread to finish.
+    drain = controller.drain_workers(timeout=5.0)
+    assert drain.alive_thread_names == ()
 
     # Runtime released and session closed despite the failure.
     assert registry.lookup("rt-1") is None
@@ -1792,11 +1868,8 @@ def test_decide_approve_resumes_runtime_and_returns_completed_result(
     assert stored_req.status == "resolved"
 
     # Step 5: cleanup
-    worker_threads = [
-        t for t in threading.enumerate() if t.name == "delegation-worker-job-1"
-    ]
-    for t in worker_threads:
-        t.join(timeout=5.0)
+    drain = controller.drain_workers(timeout=5.0)
+    assert drain.alive_thread_names == ()
     assert registry.lookup("rt-1") is None
     assert control_plane._sessions[0].closed
     handle = lineage.get("collab-1")
@@ -1889,17 +1962,17 @@ def test_decide_approve_can_reescalate_with_new_pending_request(tmp_path: Path) 
     stored_42 = prs.get("42")
     assert stored_42 is not None and stored_42.status == "resolved"
 
-    # Drain the rid=99 worker park so the daemon thread exits before the
-    # next test runs (the worker is blocked in registry.wait("99")). Without
-    # this drain, subsequent tests that enumerate threads named
-    # 'delegation-worker-job-1' (e.g., test_decide_audit_event_post_commit_non_gating
-    # at acceptance test 7) observe the leftover thread and fail.
-    controller._registry.signal_internal_abort("99", reason="test_teardown_drain")
-    worker_threads = [
-        t for t in threading.enumerate() if t.name == "delegation-worker-job-1"
-    ]
-    for t in worker_threads:
-        t.join(timeout=5.0)
+    # Resolve the rid=99 worker park through the public decision path so the
+    # worker reaches a protocol-level exit condition before drain.
+    second_result = controller.decide(
+        job_id="job-1",
+        request_id="99",
+        decision="deny",
+    )
+    assert isinstance(second_result, DelegationDecisionResult)
+    assert second_result.decision_accepted is True
+    drain = controller.drain_workers(timeout=5.0)
+    assert drain.alive_thread_names == ()
 
 
 def test_decide_deny_marks_job_completed_and_closes_runtime(tmp_path: Path) -> None:
@@ -1960,11 +2033,8 @@ def test_decide_deny_marks_job_completed_and_closes_runtime(tmp_path: Path) -> N
     assert stored_req.status == "resolved"
 
     # Cleanup
-    worker_threads = [
-        t for t in threading.enumerate() if t.name == "delegation-worker-job-1"
-    ]
-    for t in worker_threads:
-        t.join(timeout=5.0)
+    drain = controller.drain_workers(timeout=5.0)
+    assert drain.alive_thread_names == ()
     assert registry.lookup("rt-1") is None
     assert control_plane._sessions[0].closed
     handle = lineage.get("collab-1")
@@ -2019,12 +2089,9 @@ def test_decide_deny_emits_terminal_outcome(tmp_path: Path) -> None:
     assert final_job is not None, "job missing after bounded poll; job_id='job-1'"
     assert final_job.status == "completed", f"final_job={final_job!r}"
 
-    # Wait for worker thread
-    worker_threads = [
-        t for t in threading.enumerate() if t.name == "delegation-worker-job-1"
-    ]
-    for t in worker_threads:
-        t.join(timeout=5.0)
+    # Wait for tracked worker thread.
+    drain = controller.drain_workers(timeout=5.0)
+    assert drain.alive_thread_names == ()
 
     outcomes_path = journal.plugin_data_path / "analytics" / "outcomes.jsonl"
     assert outcomes_path.exists(), "Terminal outcome file must exist after deny"
@@ -2595,14 +2662,17 @@ def test_decide_rejects_stale_request_id_after_reescalation(tmp_path: Path) -> N
     assert isinstance(result, DecisionRejectedResponse)
     assert result.reason == "request_already_decided"
 
-    # Drain the rid=99 worker park so the daemon thread exits before the
-    # next test runs (see Round-6 addendum on cross-test thread leakage).
-    controller._registry.signal_internal_abort("99", reason="test_teardown_drain")
-    worker_threads = [
-        t for t in threading.enumerate() if t.name == "delegation-worker-job-1"
-    ]
-    for t in worker_threads:
-        t.join(timeout=5.0)
+    # Resolve the rid=99 worker park through the public decision path before
+    # draining the tracked worker.
+    cleanup_result = controller.decide(
+        job_id="job-1",
+        request_id="99",
+        decision="deny",
+    )
+    assert isinstance(cleanup_result, DelegationDecisionResult)
+    assert cleanup_result.decision_accepted is True
+    drain = controller.drain_workers(timeout=5.0)
+    assert drain.alive_thread_names == ()
 
 
 # -----------------------------------------------------------------------------
