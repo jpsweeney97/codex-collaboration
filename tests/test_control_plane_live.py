@@ -11,10 +11,13 @@ import pytest
 from server.codex_compat import get_codex_version
 from server.control_plane import ControlPlane
 
-pytestmark = pytest.mark.skipif(
-    shutil.which("codex") is None,
-    reason="codex binary not found on PATH",
-)
+pytestmark = [
+    pytest.mark.skipif(
+        shutil.which("codex") is None,
+        reason="codex binary not found on PATH",
+    ),
+    pytest.mark.slow,
+]
 
 
 def test_codex_status_live_reports_runtime_surface(tmp_path: Path) -> None:

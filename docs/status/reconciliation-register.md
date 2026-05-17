@@ -78,6 +78,7 @@ Scope included here:
 | ID | State | Owning artifact | Current truth | Watch trigger |
 |---|---|---|---|---|
 | `WL3-LAYERING-CI-ASSERT` | `deferred` | `docs/audits/2026-05-15-codex-collaboration-debt.md` | The scripts->server layering invariant is now documented in `foundations.md` (QW8/Task 2). The optional CI guard (`rg "from scripts\." server/` -> fail on match) is not yet wired. | At next contributor onboarding, or when a reverse import is first attempted, add the CI assertion. |
+| `HL2-XDIST-PARALLELIZATION` | `deferred` | `docs/audits/2026-05-15-codex-collaboration-debt.md` | HL2's fast/slow split + approval-window injection landed (Task 7); the suite's whole-wall-time parallelization via pytest-xdist is not yet done. The HL2-first premise (cheap to add HL1/HL5) still holds because the timeout-path injection is the load-bearing part. | If full-suite wall time after the slow/fast split is still a friction point in routine work, add `pytest-xdist` and a `-n auto` CI/local profile. |
 
 ## Ticket-Owned Active Work
 

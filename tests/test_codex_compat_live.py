@@ -26,10 +26,13 @@ from server.codex_compat import (
     probe_live_method_surface,
 )
 
-pytestmark = pytest.mark.skipif(
-    shutil.which("codex") is None,
-    reason="codex binary not found on PATH",
-)
+pytestmark = [
+    pytest.mark.skipif(
+        shutil.which("codex") is None,
+        reason="codex binary not found on PATH",
+    ),
+    pytest.mark.slow,
+]
 
 
 class TestGetCodexVersion:

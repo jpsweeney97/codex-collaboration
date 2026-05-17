@@ -49,11 +49,13 @@ Do not commit directly to `main` once initial setup is complete.
 Before claiming completion of a code change, run:
 
 ```bash
-uv run pytest tests -q
+uv run pytest tests -q -m ""
 uv run ruff check .
 ```
 
-The pytest suite has 1172 tests and takes ~4-5 minutes. A standalone CI workflow runs the same set on every push.
+The full marker-inclusive pytest suite currently takes about 1-2 minutes, and
+CI runs the same `-m ""` suite on every push. A bare `uv run pytest tests -q`
+is the fast inner-loop run and excludes `slow` live-runtime tests.
 
 ### Filesystem Layout (for path-touching code)
 

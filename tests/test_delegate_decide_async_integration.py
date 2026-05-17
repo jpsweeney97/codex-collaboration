@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -81,6 +82,54 @@ def _seed_parked_request_user_input(
     start_result = controller.start(repo_root=repo_root, objective="Ask the user")
     assert isinstance(start_result, DelegationEscalation)
     return controller, control_plane, repo_root
+
+
+def _unresolved_approval_resolution_entries(
+    controller: DelegationController,
+) -> list[Any]:
+    unresolved = controller._journal.list_unresolved(
+        session_id=controller._session_id
+    )
+    return [entry for entry in unresolved if entry.operation == "approval_resolution"]
+
+
+def _wait_for_no_unresolved_approval_resolution(
+    controller: DelegationController,
+    *,
+    timeout_seconds: float = 10.0,
+) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    leftover_approval = _unresolved_approval_resolution_entries(controller)
+    while leftover_approval and time.monotonic() < deadline:
+        time.sleep(0.01)
+        leftover_approval = _unresolved_approval_resolution_entries(controller)
+    assert leftover_approval == [], (
+        "happy decide left unresolved approval_resolution entries — "
+        "decide() and worker keys are diverging again. "
+        f"Got: {[(e.idempotency_key, e.phase) for e in leftover_approval]!r}"
+    )
+
+
+def _wait_for_matching_respond_calls(
+    respond_calls: list[tuple[Any, dict[str, Any]]],
+    *,
+    request_id: str,
+    timeout_seconds: float = 10.0,
+) -> list[tuple[Any, dict[str, Any]]]:
+    deadline = time.monotonic() + timeout_seconds
+    matching = [
+        (rid, payload)
+        for rid, payload in respond_calls
+        if str(rid) == request_id
+    ]
+    while not matching and time.monotonic() < deadline:
+        time.sleep(0.01)
+        matching = [
+            (rid, payload)
+            for rid, payload in respond_calls
+            if str(rid) == request_id
+        ]
+    return matching
 
 
 # ---------------------------------------------------------------------------
@@ -155,29 +204,8 @@ def test_happy_decide_leaves_no_unresolved_approval_resolution(
     assert isinstance(result, DelegationDecisionResult)
     assert result.decision_accepted is True
 
-    # Drain the worker so dispatched + completed records land.
-    worker_threads = [
-        t for t in threading.enumerate() if t.name == "delegation-worker-job-1"
-    ]
-    assert worker_threads, "worker thread missing"
-    this_test_worker = max(worker_threads, key=lambda t: t.ident or 0)
-    this_test_worker.join(timeout=10.0)
-    assert not this_test_worker.is_alive(), "worker thread did not drain"
-
-    # No approval_resolution entries should remain unresolved. Filter to
-    # approval_resolution operations specifically — other operations
-    # (job_creation, etc.) follow their own resolution patterns.
-    unresolved = controller._journal.list_unresolved(
-        session_id=controller._session_id
-    )
-    leftover_approval = [
-        entry for entry in unresolved if entry.operation == "approval_resolution"
-    ]
-    assert leftover_approval == [], (
-        "happy decide left unresolved approval_resolution entries — "
-        "decide() and worker keys are diverging again. "
-        f"Got: {[(e.idempotency_key, e.phase) for e in leftover_approval]!r}"
-    )
+    # Wait on this controller's journal, not global daemon-thread names.
+    _wait_for_no_unresolved_approval_resolution(controller)
 
 
 # ---------------------------------------------------------------------------
@@ -573,36 +601,13 @@ def test_decide_audit_event_post_commit_non_gating(
         "intent entry must persist even when audit fails"
     )
 
-    # (d) worker eventually dispatched respond. Wait for the worker thread
-    # to drain. spawn_worker(...) names the thread "delegation-worker-{job_id}"
-    # — locate it via threading.enumerate() and join. This is the actual
-    # non-gating evidence: commit_signal fired and woke the worker despite
-    # the audit failure.
-    #
-    # Round-6: prior tests may leak parked daemon threads under the same
-    # job_id (job-1 is deterministic across tests in this module). Find
-    # at least one matching thread and join the most-recently-started one
-    # (this test's spawn). The worker must drain — that's the non-gating
-    # evidence. Other leaked threads are from sibling tests and tolerated.
-    worker_threads = [
-        t for t in threading.enumerate() if t.name == "delegation-worker-job-1"
-    ]
-    assert worker_threads, (
-        f"no worker thread named 'delegation-worker-job-1' found; "
-        f"got {[t.name for t in threading.enumerate()]!r}"
-    )
-    # Most-recently-started thread is THIS test's worker. ident is monotonic.
-    this_test_worker = max(worker_threads, key=lambda t: t.ident or 0)
-    this_test_worker.join(timeout=10.0)
-    assert not this_test_worker.is_alive(), "worker thread did not drain"
-
     # Match by value (str(...) == "42") — wire id preservation means the
     # captured rid is int 42 (not str "42"); the worker-dispatched signal
     # is the same regardless of wire type. Wire-type fidelity is asserted
     # in test_jsonrpc_wire_id_preservation.
-    rid_42_calls = [
-        (rid, payload) for rid, payload in respond_calls if str(rid) == "42"
-    ]
+    rid_42_calls = _wait_for_matching_respond_calls(
+        respond_calls, request_id="42"
+    )
     assert rid_42_calls, (
         "worker did not dispatch respond — commit_signal failed to wake the "
         "worker (audit non-gating evidence missing)"
@@ -704,24 +709,11 @@ def test_decide_worker_dispatches_l4_payload_end_to_end(
     assert isinstance(result, DelegationDecisionResult)
     assert result.decision_accepted is True
 
-    # Drain the worker so respond_spy captures.
-    worker_threads = [
-        t for t in threading.enumerate() if t.name == "delegation-worker-job-1"
-    ]
-    assert worker_threads, "worker thread missing"
-    this_test_worker = max(worker_threads, key=lambda t: t.ident or 0)
-    this_test_worker.join(timeout=10.0)
-    assert not this_test_worker.is_alive(), "worker thread did not drain"
-
     # Match by value (str(call_rid) == rid) — wire id preservation may
     # leave call_rid as int (if the fixture used an int id); this filter
     # is shape-focused, not type-focused. Wire type is covered by
     # test_jsonrpc_wire_id_preservation.
-    matching = [
-        (call_rid, payload)
-        for call_rid, payload in respond_calls
-        if str(call_rid) == rid
-    ]
+    matching = _wait_for_matching_respond_calls(respond_calls, request_id=rid)
     assert matching, (
         f"worker did not dispatch respond for rid={rid!r}; got {respond_calls!r}"
     )
@@ -932,16 +924,11 @@ def test_worker_respond_preserves_integer_wire_id(tmp_path: Path) -> None:
     assert isinstance(result, DelegationDecisionResult)
     assert result.decision_accepted is True
 
-    # Drain the worker.
-    worker_threads = [
-        t for t in threading.enumerate() if t.name == "delegation-worker-job-1"
-    ]
-    this_test_worker = max(worker_threads, key=lambda t: t.ident or 0)
-    this_test_worker.join(timeout=10.0)
-    assert not this_test_worker.is_alive()
-
     # The captured rid must be int 42 — NOT str "42". Type-strict assertion
     # (== preserves type fidelity in Python: 42 == "42" is False).
+    respond_calls = _wait_for_matching_respond_calls(
+        respond_calls, request_id="42"
+    )
     assert respond_calls, f"worker did not dispatch respond; got {respond_calls!r}"
     captured_rid, _ = respond_calls[-1]
     assert captured_rid == 42, (

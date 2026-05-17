@@ -209,6 +209,7 @@ def _build_controller(
     *,
     head_sha: str = "head-abc",
     session_id: str = "sess-1",
+    approval_window_seconds: float | None = None,
 ) -> tuple[
     DelegationController,
     _FakeControlPlane,
@@ -256,6 +257,7 @@ def _build_controller(
         artifact_store=artifact_store,
         head_commit_resolver=lambda repo_root: head_sha,
         uuid_factory=lambda: next(uuid_counter),
+        approval_window_seconds=approval_window_seconds,
     )
     return (
         controller,
@@ -425,7 +427,9 @@ def test_start_returns_busy_response_when_active_job_exists(tmp_path: Path) -> N
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
 
-    controller, control_plane, _wm, _js, _ls, _j, _r, _prs = _build_controller(tmp_path)
+    controller, control_plane, _wm, _js, _ls, _j, _r, _prs = _build_controller(
+        tmp_path, approval_window_seconds=0.5
+    )
 
     # Configure the first start to hit a command_approval server request,
     # which produces needs_escalation (an active status).
@@ -1340,7 +1344,7 @@ def test_start_with_command_approval_returns_escalation(tmp_path: Path) -> None:
     repo_root.mkdir()
 
     controller, control_plane, _wm, _job_store, _ls, _journal, registry, prs = (
-        _build_controller(tmp_path)
+        _build_controller(tmp_path, approval_window_seconds=0.5)
     )
 
     control_plane._next_session_requests = [_command_approval_request()]
@@ -1402,7 +1406,9 @@ def test_start_with_two_requests_responds_to_both(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
 
-    controller, control_plane, _wm, _js, _ls, _j, _r, prs = _build_controller(tmp_path)
+    controller, control_plane, _wm, _js, _ls, _j, _r, prs = _build_controller(
+        tmp_path, approval_window_seconds=0.5
+    )
 
     control_plane._next_session_requests = [
         _command_approval_request(request_id=1, item_id="item-a"),
@@ -1609,7 +1615,7 @@ def test_start_with_request_user_input_completed_returns_delegation_job(
     repo_root.mkdir()
 
     controller, control_plane, _wm, _job_store, _ls, _journal, registry, prs = (
-        _build_controller(tmp_path)
+        _build_controller(tmp_path, approval_window_seconds=0.5)
     )
 
     control_plane._next_session_requests = [_request_user_input_request()]
@@ -1706,7 +1712,7 @@ def test_start_escalation_keeps_execution_handle_active(tmp_path: Path) -> None:
     repo_root.mkdir()
 
     controller, control_plane, _wm, _js, lineage, _j, _r, _prs = _build_controller(
-        tmp_path
+        tmp_path, approval_window_seconds=0.5
     )
     control_plane._next_session_requests = [_command_approval_request()]
 
@@ -2044,7 +2050,7 @@ def test_decide_rejects_when_runtime_is_missing(tmp_path: Path) -> None:
     repo_root.mkdir()
 
     controller, control_plane, _wm, _js, _ls, _j, registry, _prs = _build_controller(
-        tmp_path
+        tmp_path, approval_window_seconds=0.5
     )
     control_plane._next_session_requests = [_command_approval_request()]
     start_result = controller.start(repo_root=repo_root, objective="Fix it")
@@ -2069,7 +2075,9 @@ def test_decide_rejects_invalid_decision_value(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
 
-    controller, control_plane, _wm, _js, _ls, _j, _r, _prs = _build_controller(tmp_path)
+    controller, control_plane, _wm, _js, _ls, _j, _r, _prs = _build_controller(
+        tmp_path, approval_window_seconds=0.5
+    )
     control_plane._next_session_requests = [_command_approval_request()]
     start_result = controller.start(repo_root=repo_root, objective="Fix it")
     assert isinstance(start_result, DelegationEscalation)
@@ -2091,7 +2099,9 @@ def test_decide_request_user_input_requires_answers(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
 
-    controller, control_plane, _wm, _js, _ls, _j, _r, _prs = _build_controller(tmp_path)
+    controller, control_plane, _wm, _js, _ls, _j, _r, _prs = _build_controller(
+        tmp_path, approval_window_seconds=0.5
+    )
     control_plane._next_session_requests = [_request_user_input_request()]
     control_plane._next_turn_result = TurnExecutionResult(
         turn_id="turn-1",
@@ -2157,7 +2167,9 @@ def test_decide_rejects_request_not_found(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
 
-    controller, control_plane, _wm, _js, _ls, _j, _r, _prs = _build_controller(tmp_path)
+    controller, control_plane, _wm, _js, _ls, _j, _r, _prs = _build_controller(
+        tmp_path, approval_window_seconds=0.5
+    )
     control_plane._next_session_requests = [_command_approval_request()]
     start_result = controller.start(repo_root=repo_root, objective="Fix it")
     assert isinstance(start_result, DelegationEscalation)
@@ -2178,7 +2190,9 @@ def test_decide_rejects_request_job_mismatch(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
 
-    controller, control_plane, _wm, _js, _ls, _j, _r, prs = _build_controller(tmp_path)
+    controller, control_plane, _wm, _js, _ls, _j, _r, prs = _build_controller(
+        tmp_path, approval_window_seconds=0.5
+    )
     control_plane._next_session_requests = [_command_approval_request()]
     start_result = controller.start(repo_root=repo_root, objective="Fix it")
     assert isinstance(start_result, DelegationEscalation)
@@ -2214,7 +2228,9 @@ def test_decide_rejects_deny_with_answers(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
 
-    controller, control_plane, _wm, _js, _ls, _j, _r, _prs = _build_controller(tmp_path)
+    controller, control_plane, _wm, _js, _ls, _j, _r, _prs = _build_controller(
+        tmp_path, approval_window_seconds=0.5
+    )
     control_plane._next_session_requests = [_command_approval_request()]
     start_result = controller.start(repo_root=repo_root, objective="Fix it")
     assert isinstance(start_result, DelegationEscalation)
@@ -2236,7 +2252,9 @@ def test_decide_rejects_answers_for_non_request_user_input(tmp_path: Path) -> No
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
 
-    controller, control_plane, _wm, _js, _ls, _j, _r, _prs = _build_controller(tmp_path)
+    controller, control_plane, _wm, _js, _ls, _j, _r, _prs = _build_controller(
+        tmp_path, approval_window_seconds=0.5
+    )
     # command_approval is not request_user_input — answers not allowed
     control_plane._next_session_requests = [_command_approval_request()]
     start_result = controller.start(repo_root=repo_root, objective="Fix it")
@@ -2611,7 +2629,7 @@ def test_start_escalation_keeps_promotion_state_none(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
     controller, control_plane, _wm, job_store, _lineage, _journal, _registry, _prs = (
-        _build_controller(tmp_path)
+        _build_controller(tmp_path, approval_window_seconds=0.5)
     )
     control_plane._next_session_requests = [_command_approval_request()]
     result = controller.start(repo_root=repo_root)
@@ -2670,7 +2688,7 @@ def test_poll_needs_escalation_projects_pending_request_without_raw_ids(
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
     controller, control_plane, _wm, _job_store, _lineage, _journal, _registry, _prs = (
-        _build_controller(tmp_path)
+        _build_controller(tmp_path, approval_window_seconds=0.5)
     )
     control_plane._next_session_requests = [_command_approval_request()]
     start_result = controller.start(repo_root=repo_root)
