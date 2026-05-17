@@ -189,6 +189,8 @@ Unknown requests are **never auto-approved**. This is the fail-closed default: n
 
 No `action: escalate` [audit event](contracts.md#auditevent) is emitted for unknown terminalization. Terminal evidence is the persisted request record plus `DelegationOutcomeRecord(outcome_type="delegation_terminal", terminal_status="unknown")`.
 
+Unknown terminalization continues to use the persisted `PendingServerRequest(kind="unknown")` plus `DelegationOutcomeRecord(terminal_status="unknown")` as its provenance record. It does not emit an `AuditEvent` unless a later ADR changes the AuditEvent-vs-OutcomeRecord split.
+
 [T-20260429-02](../../../tickets/2026-04-29-codex-collaboration-unsupported-server-request-reachability.md) classifies each unsupported App Server method individually — methods may be promoted to the parkable/supported set, proven as intentionally safe-terminal, or proven non-reachable in current flows.
 
 ## Concurrency Limits
