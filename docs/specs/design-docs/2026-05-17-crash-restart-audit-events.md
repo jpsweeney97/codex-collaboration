@@ -1,0 +1,121 @@
+# Crash/Restart Audit Events — Phase 2 Mini-Design
+
+**Date:** 2026-05-17
+**Register row:** `DEBT-20260517-HL2-CRASH-RESTART-AUDIT`
+**Status:** Accepted (design); implementation pending
+**Owner docs touched:** [`contracts.md`](../contracts.md) (audit schema), [`recovery-and-journal.md`](../recovery-and-journal.md) (recovery + audit-log behavior)
+
+This document is the decision record. The **normative** model lives in the owner docs above; this doc explains *why*, records the justified deviation from the live plan's prescribed defaults, and defines the verification oracle.
+
+## Problem
+
+`crash` and `restart` are declared in the audit-event action vocabulary but were carried as **reserved, never emitted** — the owner docs said they "will be emitted when crash-recovery audit wiring is implemented." The reserved trigger rows further specified them as **runtime-level events keyed by `runtime_id`**, with a forward note that "the `restart` event should link to the `crash` event for forensic correlation."
+
+Two facts from the live code make the reserved framing unimplementable as written:
+
+1. **There is no concrete process-level crash signal.** No pid file, lock file, or crash sentinel exists. A crash is only *inferable at startup-recovery time* from residual state: unresolved `OperationJournalEntry` records, orphaned active delegation jobs, or lineage handles whose runtime is gone. The audit record's timestamp is recovery time, not crash time.
+2. **`runtime_id` is not universally available.** `AuditEvent.runtime_id` is a required non-empty string, but `OperationJournalEntry.runtime_id` is optional (`thread_creation` entries never carry it; `turn_dispatch`/`job_creation` carry it only when knowable). The reserved "runtime-level, `runtime_id` required" framing cannot hold for journal-only recovery.
+
+## Decision
+
+Adopt a **recovery-event audit model**, not a process-crash model:
+
+- `crash` means *startup recovery detected residual state implying a prior runtime interruption*. It carries `detected_during="startup_recovery"` and makes no claim about the original crash timestamp.
+- `restart` means *a runtime was actually reattached/resumed for a specific subject*. It is **not** "recovery touched this item." Detect-and-quarantine outcomes (job marked `unknown`, handle quarantined, journal entry reconciled-to-completed without reattach) emit `crash` only.
+- No `AuditEvent` schema change. `action` is an unconstrained `str`; the vocabulary is doc-defined. `extra` already exists and carries the recovery sub-contract.
+
+### Three recovery subjects
+
+The honest identity available to recovery is whatever the *subject* itself records. There are exactly three subjects, each keyed on its own stable identity:
+
+| `recovery_subject` | stem | events | `runtime_id` source | `recovery_result` |
+|---|---|---|---|---|
+| `lineage_handle` | `lineage_handle:{collaboration_id}` | `crash`+`restart` co-emitted at reattach success | `crash`: handle's pre-reattach (dead) `runtime_id`; `restart`: new resumed `runtime_id` | `handle_reattached` |
+| `lineage_handle` | `lineage_handle:{collaboration_id}` | `crash` only (reattach failed → `unknown`) | handle's pre-reattach `runtime_id` (real, required) | `handle_quarantined_unknown` |
+| `orphaned_active_job` | `orphaned_active_job:{job_id}` | `crash` only | `DelegationJob.runtime_id` (real, required, now dead) | `job_marked_unknown` |
+| `operation_journal` | `operation_journal:{operation}:{idempotency_key}` | `crash` only (journal reconciled, no reattached handle) | `entry.runtime_id` if recorded, else the sentinel below | `journal_reconciled` |
+
+`recovery_key = "{stem}:{action}"`. A `restart` always carries `extra["crash_recovery_key"]` pointing at the **same subject's** crash recovery key — so the forensic link the owner doc wanted is true by construction, never dangling. `crash` may stand alone (quarantine paths have no restart).
+
+**Precedence rule (no double-crash for one incident):** if recovery reattaches a handle, the incident is recorded on the `lineage_handle` subject; we do **not** also emit a separate `operation_journal` crash for that same handle's driving entry. The entry's `operation`/`phase` ride along in `extra` (`recovery_operation`, `recovery_phase`). `operation_journal` crash covers only reconciled operations with **no** reattached handle — in practice the delegation `job_creation`/`approval_resolution` reconciles, which never reattach (delegation crash recovery quarantines to `unknown` by policy).
+
+### Identity shape — no schema change, narrow sentinel
+
+`collaboration_id` is always real: `OperationJournalEntry`, `CollaborationHandle`, and `DelegationJob` each carry a required non-empty `collaboration_id`. `runtime_id` is real for `lineage_handle` (required on the handle) and `orphaned_active_job` (required on `DelegationJob`). The **only** path that can lack a runtime identity is `operation_journal` whose entry never recorded one.
+
+Sentinel: `runtime_id = "recovery:unknown-runtime"`.
+
+**Sentinel invariant (exact):** appears **iff** `action="crash"` **and** `detected_during="startup_recovery"` **and** `recovery_subject="operation_journal"` **and** the driving entry recorded no `runtime_id`. Never on `restart`. Never on `lineage_handle` or `orphaned_active_job` (model-guaranteed real IDs). The sentinel is a truthful "this runtime was never identified," not a placeholder for a knowable value.
+
+### Duplicate prevention
+
+Single owner: `OperationJournal`. New helper:
+
+```python
+def append_recovery_audit_event_once(self, event: AuditEvent, *, recovery_key: str) -> bool:
+    """Append a recovery audit event unless (action, recovery_key) already exists.
+
+    Dedupes against both in-memory state and persisted audit/events.jsonl.
+    Returns True when appended, False when a duplicate was suppressed.
+    """
+```
+
+- Dedup key: `(event.action, recovery_key)`. The caller constructs the event already carrying `extra["recovery_key"] == recovery_key`; the helper fails fast if they disagree.
+- A dedicated recovery seen-set is loaded from `audit/events.jsonl` via the existing generic file-replay helper with a recovery-specific record callback. It is **separate** from the dialogue dedup set — the key shapes differ and sharing would corrupt dialogue dedup.
+- Controllers MUST NOT keep their own duplicate sets. No process-level coordination flag on `McpServer` is needed: the persisted `(action, recovery_key)` check spans the whole process and disk, so eager `startup()` and lazy `_ensure_*_controller()` recovery cannot double-emit.
+
+**`collaboration_id`-stability invariant (load-bearing):** the `lineage_handle` stem keys on `collaboration_id`, **never** `runtime_id`. Dialogue reattach calls `update_runtime(...)`, mutating the handle's `runtime_id`; a `runtime_id`-keyed stem would change between a failed lazy-recovery attempt and its retry, defeating persisted dedup on exactly the duplicate vector that matters. The duplicate vector is concrete: dialogue phase-2 reattach is driven by lineage-store enumeration (not the self-consuming journal worklist), so a retry re-enumerates an already-reattached handle and would re-emit `crash`+`restart` — only the persisted `(action, recovery_key)` check stops it. This makes the persisted dedup load-bearing, not belt-and-suspenders.
+
+### Emission ordering and failure semantics
+
+A recovery audit event is appended **only after** the local reconciliation write for that item succeeds:
+
+- `operation_journal` `crash`: after `write_phase(... phase="completed" ...)` for the entry succeeds.
+- `orphaned_active_job` `crash`: after the job transition to `unknown` is persisted.
+- `lineage_handle` `crash`+`restart`: after the reattach write (`update_runtime`) succeeds — `crash` then `restart`. Failed reattach: after the quarantine write (`update_status(... "unknown")`), `crash` only.
+
+A recovery failure before the reconciliation write emits nothing; it never produces a false successful `restart`. Controllers still pin only after recovery succeeds (existing `McpServer` ordering is preserved).
+
+### `extra` contract
+
+Mandatory on every recovery event: `recovery_key`, `recovery_subject`, `recovery_result`, `detected_during` (`="startup_recovery"` for this phase — all crash/restart is recovery-inferred).
+
+Conditional: `recovery_operation` and `recovery_phase` are present iff a driving `OperationJournalEntry` exists. `crash_recovery_key` is present on `restart` only.
+
+This is a **normative sub-contract** for `action ∈ {crash, restart}`, an explicit documented exception to the general "`extra` is untyped, consumers should not rely on keys" rule. The exception is recorded in `contracts.md`.
+
+## Durability
+
+The audit log is **best-effort append** (its retention class in `recovery-and-journal.md`). A crash/restart audit record is therefore best-effort: if the process dies between the reconciliation write and the audit append, the record may be absent. The **durable** truth of recovery is the journal/lineage/job state itself (journal advanced to `completed`, handle/job marked `unknown` or reattached). The audit event is the human-reconstruction layer over that durable state, consistent with the existing audit-log guarantee. This design does not claim — and must not be read as claiming — exactly-once durable crash/restart records.
+
+## Justified deviation from the live plan's prescribed defaults
+
+The live plan (`docs/superpowers/plans/2026-05-17-codex-collaboration-debt-active-rows.md`, Phase 2) pre-committed a default in which `restart` is emitted for *any* reconciled recovery item, including delegation orphaned active jobs (prescribed `recovery_key = f"orphaned_active_job:{job.job_id}:restart"`). The plan permits rejecting a default "with evidence." The evidence:
+
+1. The owner doc defines `restart` literally as *"Runtime restarted after crash."*
+2. Delegation crash recovery **quarantines** orphaned jobs to `unknown` for user decision (per `recovery-and-journal.md` §Delegation Runtime Crash). Nothing restarts.
+3. The audit log's stated purpose is **human incident reconstruction**. Emitting `restart` for a quarantined job writes a false statement into the forensic trail.
+
+The plan is therefore patched in lockstep (not merely annotated): orphaned jobs emit `crash` only; the three stems and the `collaboration_id` dedup invariant are named in the plan; the Phase 2 test oracle and the HL2 closeout definition are updated. This deviation changes the Phase 2 test oracle, so it is recorded here as the authoritative rationale and mirrored into the plan rather than left as a divergence.
+
+## Spec changes (normative homes)
+
+- **`recovery-and-journal.md`** — clean rewrite of the `crash`/`restart` trigger rows from reserved/runtime-level to the recovery-event model; rewrite of the Advisory Runtime Crash closing note ("restart links to its crash via `crash_recovery_key`; crash may stand alone"); new normative subsection carrying the three-subject table, sentinel invariant, dedup owner/key, `collaboration_id` invariant, emission ordering, and `extra`-by-subject. No "reserved/not emitted" language for `crash`/`restart` is left behind. `fork`/`rotate`/`freeze`/`reap` remain reserved.
+- **`contracts.md`** — move `crash`/`restart` from the Reserved table to Currently emitted (`actor="system"`), cross-referencing the recovery section; add the normative `extra` sub-contract exception for `action ∈ {crash, restart}`; note the `runtime_id` recovery sentinel.
+
+## Out of scope
+
+No non-recovery, process-level crash trigger is invented — none exists in the code and fabricating one would require a real crash signal this phase does not add. All `crash`/`restart` emission in this phase is recovery-inferred, which is the honest and complete surface for HL2. No residual row is required: every reachable recovery subject is covered, so `DEBT-20260517-HL2-CRASH-RESTART-AUDIT` closes when source and tests match this design.
+
+## Verification oracle
+
+The implementation is correct when tests prove:
+
+1. Emitted events are `AuditEvent(action="crash"|"restart")`, not ad hoc dicts.
+2. `lineage_handle`: a successfully reattached advisory handle emits a `crash` (old runtime) + `restart` (new runtime) pair on the same stem; `restart.extra["crash_recovery_key"]` resolves to the emitted `crash`.
+3. `orphaned_active_job`: a persisted `running`/`needs_escalation` job whose `job_creation` journal entry is already `completed` emits `crash` only, `runtime_id == DelegationJob.runtime_id`, `recovery_result="job_marked_unknown"`.
+4. `operation_journal`: a reconciled entry with no recorded `runtime_id` emits `crash` with `runtime_id="recovery:unknown-runtime"` and the exact sentinel invariant holds; an entry with a recorded `runtime_id` uses it.
+5. Clean startup (no unresolved entries, no orphaned jobs, no stale handles) emits **no** `crash` and **no** `restart`.
+6. Recovery reached through both eager and lazy paths, and a retry after a failed lazy recovery, do not duplicate `crash` or `restart` (persisted `(action, recovery_key)` dedup; `collaboration_id`-keyed stem).
+7. Recovery failure before the reconciliation write emits nothing and never a false successful `restart`; the controller is not pinned.
+8. `append_recovery_audit_event_once` suppresses duplicate `(action, recovery_key)` pairs and allows distinct ones; it fails fast if `event.extra["recovery_key"]` disagrees with the `recovery_key` argument.

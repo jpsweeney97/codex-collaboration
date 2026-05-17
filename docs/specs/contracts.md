@@ -193,14 +193,14 @@ Append-only event record for human reconstruction and diagnostics. Write behavio
 | `actor` | enum | `claude`, `codex`, `user`, `system` |
 | `action` | enum | See [action values](#audit-event-actions) |
 | `collaboration_id` | string | Associated collaboration |
-| `runtime_id` | string | Runtime that the event occurred in |
+| `runtime_id` | string | Runtime that the event occurred in. For a recovery-inferred `crash` on the `operation_journal` subject whose entry recorded no runtime, the documented sentinel `recovery:unknown-runtime` (see [recovery-and-journal.md §Recovery-Inferred Crash/Restart Audit](recovery-and-journal.md#recovery-inferred-crashrestart-audit)) |
 | `policy_fingerprint` | string? | Runtime policy fingerprint at event time |
 | `job_id` | string? | Delegation job (for execution-domain events) |
 | `request_id` | string? | Associated [PendingServerRequest](#pendingserverrequest) |
 | `turn_id` | string? | Codex turn context |
 | `decision` | enum? | `approve`, `deny` |
 | `context_size` | integer? | UTF-8 byte length of the final assembled packet sent to Codex, post-assembly and post-redaction. Used for budget enforcement and monitoring. |
-| `extra` | dict? | Optional untyped fields (e.g., `repo_root` for consult events). Not part of the typed contract — consumers should not rely on specific keys. |
+| `extra` | dict? | Optional untyped fields (e.g., `repo_root` for consult events). Not part of the typed contract — consumers should not rely on specific keys, **except** the normative recovery sub-contract for `action ∈ {crash, restart}` (see [§Recovery Audit Extra Sub-Contract](#recovery-audit-extra-sub-contract)) |
 
 Richer analytics and provenance fields (artifact hashes, terminal statuses, workflow discriminators) are carried by [OutcomeRecord and DelegationOutcomeRecord](decisions.md#analytics-and-review-cutover-model), not by AuditEvent. AuditEvent records trust-boundary crossings; outcome records support analytics aggregation.
 
@@ -222,17 +222,33 @@ Richer analytics and provenance fields (artifact hashes, terminal statuses, work
 | `approval_timeout` | execution | `system` | Server request timed out without resolution. Carries `job_id` and `request_id`. |
 | `internal_abort` | execution | `system` | Parked server request aborted internally (e.g., job cancellation while waiting for operator decision). Carries `job_id` and `request_id`. |
 | `dispatch_failed` | execution | `system` | Operator decision was made but dispatch to App Server failed. Carries `job_id` and `request_id`. |
+| `crash` | both | `system` | Startup recovery detected residual state implying a prior runtime interruption. Recovery-inferred — carries `extra.detected_during="startup_recovery"` and makes no claim about the original crash time. May stand alone. See [recovery-and-journal.md §Recovery-Inferred Crash/Restart Audit](recovery-and-journal.md#recovery-inferred-crashrestart-audit). |
+| `restart` | both | `system` | A runtime was actually reattached/resumed for a subject during startup recovery. Links to its `crash` via `extra.crash_recovery_key`. Not emitted for detect-and-quarantine outcomes. See [recovery-and-journal.md §Recovery-Inferred Crash/Restart Audit](recovery-and-journal.md#recovery-inferred-crashrestart-audit). |
 
 **Reserved (not currently emitted):**
 
 | Action | Domain | Description |
 |---|---|---|
-| `crash` | both | Runtime crashed — will be emitted when crash-recovery audit wiring is implemented |
-| `restart` | both | Runtime restarted after crash — will be emitted when crash-recovery audit wiring is implemented |
 | `fork` | advisory | Thread forked — will be produced by `seed_from` on `codex.dialogue.start` when implemented; provenance tracked via [CollaborationHandle.parent_collaboration_id](#collaborationhandle). See [decisions.md §Dialogue Fork Scope](decisions.md#dialogue-fork-scope) |
 | `rotate` | advisory | Advisory runtime rotated — future-scope freeze-and-rotate design, not current Packet 1 runtime behavior. See [advisory-runtime-policy.md §Freeze-and-Rotate](advisory-runtime-policy.md#freeze-and-rotate-semantics) |
 | `freeze` | advisory | Advisory runtime frozen — future-scope freeze-and-rotate design. See [advisory-runtime-policy.md §Freeze](advisory-runtime-policy.md#freeze) |
 | `reap` | advisory | Frozen runtime reaped — future-scope freeze-and-rotate design. See [advisory-runtime-policy.md §Reap Conditions](advisory-runtime-policy.md#reap-conditions) |
+
+### Recovery Audit Extra Sub-Contract
+
+For `action ∈ {crash, restart}`, the otherwise-untyped `extra` dict carries a **normative** sub-contract. This is the single documented exception to the general rule that consumers must not rely on `extra` keys.
+
+| Key | Type | Presence | Meaning |
+|---|---|---|---|
+| `recovery_key` | string | Mandatory | Per-subject, per-action idempotency key, `"{stem}:{action}"`. Dedup key together with `action` |
+| `recovery_subject` | enum | Mandatory | `lineage_handle`, `orphaned_active_job`, or `operation_journal` |
+| `recovery_result` | enum | Mandatory | `handle_reattached`, `handle_quarantined_unknown`, `job_marked_unknown`, or `journal_reconciled` |
+| `detected_during` | string | Mandatory | `"startup_recovery"` (all crash/restart is recovery-inferred) |
+| `recovery_operation` | string | Conditional | Present iff a driving `OperationJournalEntry` exists; its `operation` |
+| `recovery_phase` | string | Conditional | Present iff a driving `OperationJournalEntry` exists; its latest unresolved `phase` |
+| `crash_recovery_key` | string | `restart` only | The same subject's `crash` `recovery_key`; resolves by construction |
+
+The subject model, stem definitions, sentinel invariant, dedup owner, the `collaboration_id`-stability invariant, and emission ordering are owned by [recovery-and-journal.md §Recovery-Inferred Crash/Restart Audit](recovery-and-journal.md#recovery-inferred-crashrestart-audit).
 
 ## Typed Response Shapes
 
