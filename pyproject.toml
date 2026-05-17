@@ -14,3 +14,7 @@ dev = [
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+markers = [
+    "slow: tests that intentionally exercise timeout or live-runtime behavior",
+]
+addopts = "-m 'not slow'"

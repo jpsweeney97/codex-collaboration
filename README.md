@@ -52,7 +52,8 @@ This repository is now standalone — clone it and develop from its root.
 git clone <this-repo> /Users/jp/Projects/active/codex-collaboration
 cd /Users/jp/Projects/active/codex-collaboration
 uv sync
-uv run pytest tests -q
+uv run pytest tests -q              # fast inner loop; excludes slow live-runtime tests
+uv run pytest tests -q -m ""        # full marker-inclusive suite
 uv run ruff check .
 ```
 
@@ -137,7 +138,8 @@ The plugin reads the following environment variables at module load. Plugin rest
 ## Tests
 
 ```bash
-uv run pytest tests -q              # full suite (1172 tests, ~4-5 min)
+uv run pytest tests -q              # fast inner loop; excludes slow live-runtime tests
+uv run pytest tests -q -m ""        # full marker-inclusive suite (CI uses this)
 uv run pytest tests/test_runtime.py # single file
 uv run ruff check .                 # lint
 ```

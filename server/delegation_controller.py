@@ -416,6 +416,7 @@ class DelegationController:
         head_commit_resolver: Callable[[Path], str] | None = None,
         uuid_factory: Callable[[], str] | None = None,
         promotion_callback: _PromotionCallbackLike | None = None,
+        approval_window_seconds: float | None = None,
     ) -> None:
         self._control_plane = control_plane
         self._worktree_manager = worktree_manager
@@ -431,6 +432,11 @@ class DelegationController:
         self._head_commit_resolver = head_commit_resolver or _resolve_head_commit
         self._uuid_factory = uuid_factory or (lambda: str(uuid.uuid4()))
         self._promotion_callback = promotion_callback
+        self._approval_window_seconds = (
+            _APPROVAL_OPERATOR_WINDOW_SECONDS
+            if approval_window_seconds is None
+            else approval_window_seconds
+        )
         self._registry: ResolutionRegistry = ResolutionRegistry()
 
     def start(
@@ -1111,7 +1117,7 @@ class DelegationController:
                 parsed.request_id,
                 job_id=job_id,
                 kind=cast(EscalatableRequestKind, parsed.kind),
-                timeout_seconds=_APPROVAL_OPERATOR_WINDOW_SECONDS,
+                timeout_seconds=self._approval_window_seconds,
             )
             registry.announce_parked(job_id, request_id=parsed.request_id)
 
