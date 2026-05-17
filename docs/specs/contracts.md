@@ -123,7 +123,7 @@ The session-id subdirectory isolates each session's handles. `${CLAUDE_PLUGIN_DA
 
 **Compaction:** Optional. When the log exceeds a size threshold (e.g., 100 records), the store may compact by writing a fresh file via temp-file-then-rename with `fsync`. Compaction is a performance optimization, not a correctness requirement — the append-only log is always readable without it.
 
-**Cleanup:** On session end, the control plane removes its `<claude_session_id>/` subdirectory. Stale session directories (from crashes that prevented cleanup) are pruned on next plugin startup by scanning for directories whose session is no longer active.
+**Cleanup:** On normal MCP server shutdown (`server.run()` returns), bootstrap cleanup removes registered session-store directories for the session, including `lineage/<claude_session_id>/` and `turns/<claude_session_id>/`. If `server.run()` raises, the process crashes or is killed, or the machine shuts down, these directories are preserved for recovery and forensic inspection. Automatic startup pruning of abandoned session-store directories is not currently owned; a separate retention owner must be specified before deleting them automatically.
 
 **Security posture:** The lineage store contains opaque identifiers (collaboration_ids, Codex thread_ids), not secrets or conversation content. Thread IDs are routing handles into Codex thread history — they should be treated as internal state, not exposed outside the plugin data directory. No additional access controls beyond `${CLAUDE_PLUGIN_DATA}` defaults.
 

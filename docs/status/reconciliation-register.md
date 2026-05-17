@@ -79,6 +79,7 @@ Scope included here:
 |---|---|---|---|---|
 | `WL3-LAYERING-CI-ASSERT` | `deferred` | `docs/audits/2026-05-15-codex-collaboration-debt.md` | The scripts->server layering invariant is now documented in `foundations.md` (QW8/Task 2). The optional CI guard (`rg "from scripts\." server/` -> fail on match) is not yet wired. | At next contributor onboarding, or when a reverse import is first attempted, add the CI assertion. |
 | `HL2-XDIST-PARALLELIZATION` | `deferred` | `docs/audits/2026-05-15-codex-collaboration-debt.md` | HL2's fast/slow split + approval-window injection landed (Task 7); the suite's whole-wall-time parallelization via pytest-xdist is not yet done. The HL2-first premise (cheap to add HL1/HL5) still holds because the timeout-path injection is the load-bearing part. | If full-suite wall time after the slow/fast split is still a friction point in routine work, add `pytest-xdist` and a `-n auto` CI/local profile. |
+| `HL4a-LINEAGE-CACHE` | `deferred` | `docs/audits/2026-05-15-codex-collaboration-debt.md` | TurnStore replay cache landed (Task 12, single-instance-per-session, safe). The LineageStore replay cache is deferred because LineageStore is constructed twice per session over one shared JSONL — a per-instance cache returns stale handles. | If lineage replay is shown to dominate a real dispatch path, implement Option A (mtime/size invalidation) or Option B (one shared per-session LineageStore instance). |
 
 ## Ticket-Owned Active Work
 

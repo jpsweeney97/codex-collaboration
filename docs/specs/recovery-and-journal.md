@@ -222,8 +222,11 @@ Canonical retention values. TTL triggers vary by resource: see the Trigger colum
 | Failed/crashed worktree | 24 hours | After crash detection or failure |
 | Audit log records (`events.jsonl`) | 30 days | From event timestamp |
 | Outcome records (`outcomes.jsonl`) | 30 days | From event timestamp |
+| Lineage/turn session stores | Session end | Normal `server.run()` return cleans registered directories |
 | Advisory runtime | Session end | Claude session termination |
 | Abandoned sessions | Next startup | Scan for orphaned runtimes/worktrees |
 | Diff/test summary | Survives worktree cleanup | Retained in `${CLAUDE_PLUGIN_DATA}` after worktree removal |
 
 The diff/test summary is explicitly retained after worktree cleanup so that delegation history remains inspectable even after the worktree is removed.
+
+Lineage and turn session-store cleanup is a normal-exit action only. Bootstrap registers lazily constructed stores and deduplicates them by session directory, then removes the registered directories after `server.run()` returns. In-process server exceptions, hard crashes, process kills, and machine shutdowns preserve these stores for recovery and forensic inspection until a separate startup-prune owner is specified.
