@@ -5,7 +5,7 @@ Use this file for open or unreconciled work.
 Start at [Current State](./current-state.md) for project orientation,
 implemented-now surface, authority ownership, and reader routing.
 
-Last reconciled: 2026-05-16
+Last reconciled: 2026-05-17
 
 ## Authority
 
@@ -33,6 +33,8 @@ Scope included here:
 - Benchmark closeout follow-on work that remains intentionally unresolved
 - Spec and documentation reconciliation debt
 - Intentional future-scope deferrals that are still active design surfaces
+- Recent closeout rows when they explain why a formerly active blocker left
+  the active list
 - Active supporting artifacts whose open/closed design state no longer matches
   current decisions
 
@@ -45,33 +47,41 @@ Scope included here:
 | `drift` | The underlying implementation or closure state changed, but the owning artifact still says the old thing |
 | `missing-artifact` | Work exists conceptually, but the durable tracker is missing |
 | `deferred` | Intentionally out of the current slice, but still a live future-scope surface |
+| `closed` | Resolved; retained briefly as closeout evidence because it was recently a priority item |
 
 ## Current Priority Order
 
-1. Execute or explicitly disposition the tech-debt audit remediation plan from
-   `docs/superpowers/plans/2026-05-16-codex-collaboration-debt-repair.md`,
-   preserving the HL2 -> HL1 -> HL5 ordering for Codex App Server contract
-   work.
-2. Close `T-20260429-01` by recording closure evidence for the three
+1. Close `T-20260429-01` by recording closure evidence for the three
    unchecked acceptance criteria: comparable `/delegate` smoke with
    avoidable sandbox-friction escalations <=2 (AC #1); credential-boundary
    probe (AC #2); `test_runtime.py` regression assertion updated and full
    codex-collaboration test suite passing (AC #3). Phase 1 implementation
    has landed on `main` (`runtime.py:111-114`). Count legitimate
    operator-gated approvals separately.
-3. Classify or intentionally safe-terminalize the currently unsupported App
+2. Execute or explicitly defer `T-20260516-01`, the Codex App Server
+   version-pin upgrade. HL1 payload-shape contract tests are now landed, so
+   the next decision is target version plus live-smoke evidence.
+3. Decide `T-20260516-02`, the Codex App Server contract-version assertion
+   boundary. QW4 remains a startup preflight stopgap, not ST3 closure.
+4. Classify or intentionally safe-terminalize the currently unsupported App
    Server request kinds tracked by `T-20260429-02`.
-4. Sweep residual typing and minor Packet 1 carry-forward debt (`TT.1`,
+5. Sweep residual typing and minor Packet 1 carry-forward debt (`TT.1`,
    `RT.1`, `P1-MINOR-SWEEP`).
-5. Convert `BMARK-L1-L3` into explicit follow-up tickets or deliberately
+6. Convert `BMARK-L1-L3` into explicit follow-up tickets or deliberately
    decline those L1/L2/L3 items as non-goals.
-6. Specify or explicitly defer `AUDIT-CONSUMER-INTERFACE`.
+7. Specify or explicitly defer `AUDIT-CONSUMER-INTERFACE`.
 
 ## Audit-Owned Active Work
 
-| ID | State | Owning artifact | Current truth | Exit condition |
+No audit-owned active row remains after `DEBT-20260515` closeout. Residual
+work from that audit is either ticket-owned active work or an explicit deferred
+watch row below.
+
+## Recently Closed Audit Work
+
+| ID | State | Owning artifact | Closeout evidence | Residual owner |
 |---|---|---|---|---|
-| `DEBT-20260515` | `open` | `docs/audits/2026-05-15-codex-collaboration-debt.md` and `docs/superpowers/plans/2026-05-16-codex-collaboration-debt-repair.md` | The 2026-05-15 debt audit found no P0s and four P1s, with the strongest systemic cluster around unmanaged Codex CLI contract/version drift. Quick wins are bounded, but Codex wire-contract work must follow the sequence HL2 -> HL1 -> HL5 before version-pin upgrade execution. | Each quick win is either landed or explicitly declined; HL2, HL1, and HL5 have passing verification; ST2 has a tracked upgrade artifact or is deliberately downgraded with evidence. |
+| `DEBT-20260515` | `closed` | `docs/audits/2026-05-15-codex-collaboration-debt.md` and `docs/superpowers/plans/2026-05-16-codex-collaboration-debt-repair.md` | PR #4 published the audit (`cd205e5`); PR #5 published the plan (`d9a76ed`); PRs #6-#9 landed the four execution phases (`32792af`, `b823386`, `a649b9d`, `b34a39b`). Main CI passed after every merge. Phase 4 close gates included `uv run pytest tests -q -m ""` -> 1199 passed, `uv run pytest tests/test_codex_wire_contract.py -q -rA` -> 6 passed with no skips, and `uv run ruff check .` passing. | Active residuals are `T-20260516-01` (ST2 upgrade) and `T-20260516-02` (ST3 contract-version decision). Intentional deferrals are `HL2-XDIST-PARALLELIZATION`, `HL4a-LINEAGE-CACHE`, `ST1-KNOWLEDGE-TRANSFER`, `WL1-MODELS-MEGAHUB`, `WL2-ANY-TYPED-CONTROLLERS`, `WL3-LAYERING-CI-ASSERT`, `WL4-UNBOUNDED-AUDIT-LOG`, `WL5-MODELS-HOLDS-SESSION`, and `WL6-CONCURRENT-PROMOTION-LOCK`. |
 
 ## Audit-Owned Deferred Watch Rows
 

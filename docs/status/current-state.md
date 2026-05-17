@@ -1,6 +1,6 @@
 # codex-collaboration Current State
 
-Last updated: 2026-05-16
+Last updated: 2026-05-17
 
 ## Start Here
 
@@ -104,11 +104,12 @@ and exit conditions.
 The main current watchpoints are:
 
 - delegation friction reduction (`T-20260429-01`)
+- Codex App Server version-pin upgrade (`T-20260516-01`)
+- Codex App Server contract-version assertion decision (`T-20260516-02`)
 - unsupported App Server request reachability / handling (`T-20260429-02`)
 - Packet 1 carry-forward debt (`TT.1`, `RT.1`, `P1-MINOR-SWEEP`)
 - benchmark-carried follow-on work (`BMARK-L1-L3`)
 - open spec question `AUDIT-CONSUMER-INTERFACE`
-- tech-debt audit remediation (`docs/audits/2026-05-15-codex-collaboration-debt.md`), with the Codex CLI wire-contract cluster sequenced behind test-loop speed and payload-shape contract coverage
 
 This document names the categories only. Use the reconciliation register for the
 current-truth summaries, owning artifacts, and exit conditions.
