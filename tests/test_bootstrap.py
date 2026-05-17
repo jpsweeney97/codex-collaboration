@@ -416,6 +416,52 @@ class TestBootstrapCodexCompatPreflight:
         assert "compat_checker" not in created_kwargs[0]
 
 
+class TestBootstrapSessionStoreCleanup:
+    def test_bootstrap_cleans_session_stores_after_server_run(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        mod = _import_bootstrap()
+        _patch_bootstrap_run(monkeypatch, mod, tmp_path)
+        (tmp_path / "session_id").write_text("sess-cleanup", encoding="utf-8")
+
+        def run_with_controllers(self: object) -> None:
+            self._ensure_dialogue_controller()
+            self._ensure_delegation_controller()
+
+        monkeypatch.setattr(mod.McpServer, "run", run_with_controllers)
+
+        mod.main()
+
+        assert not (tmp_path / "lineage" / "sess-cleanup").exists()
+        assert not (tmp_path / "turns" / "sess-cleanup").exists()
+
+    def test_bootstrap_preserves_session_stores_when_server_run_raises(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        mod = _import_bootstrap()
+        _patch_bootstrap_run(monkeypatch, mod, tmp_path)
+        (tmp_path / "session_id").write_text(
+            "sess-cleanup-error", encoding="utf-8"
+        )
+
+        def fail_run(self: object) -> None:
+            self._ensure_dialogue_controller()
+            self._ensure_delegation_controller()
+            raise RuntimeError("server stopped")
+
+        monkeypatch.setattr(mod.McpServer, "run", fail_run)
+
+        with pytest.raises(RuntimeError, match="server stopped"):
+            mod.main()
+
+        assert (tmp_path / "lineage" / "sess-cleanup-error").exists()
+        assert (tmp_path / "turns" / "sess-cleanup-error").exists()
+
+
 class TestPublishSessionIdHook:
     """Tests for the SessionStart hook script."""
 

@@ -43,6 +43,20 @@ from server.worktree_manager import WorktreeManager  # noqa: E402
 logger = logging.getLogger(__name__)
 
 
+class _SessionStoreCleanupRegistry:
+    def __init__(self) -> None:
+        self._cleanup_by_dir: dict[Path, Callable[[], None]] = {}
+
+    def register(self, store: object) -> None:
+        store_dir = getattr(store, "_store_dir")
+        cleanup = getattr(store, "cleanup")
+        self._cleanup_by_dir[store_dir] = cleanup
+
+    def cleanup_all(self) -> None:
+        for cleanup in self._cleanup_by_dir.values():
+            cleanup()
+
+
 def _read_session_id(plugin_data_path: Path) -> str:
     """Read the published session identity from the SessionStart hook.
 
@@ -71,6 +85,7 @@ def _build_dialogue_factory(
     plugin_data_path: Path,
     control_plane: ControlPlane,
     journal: OperationJournal,
+    store_cleanup: _SessionStoreCleanupRegistry | None = None,
 ) -> Callable[[], DialogueController]:
     """Return a zero-arg factory that builds a DialogueController on first call.
 
@@ -83,6 +98,9 @@ def _build_dialogue_factory(
         session_id = _read_session_id(plugin_data_path)
         lineage_store = LineageStore(plugin_data_path, session_id)
         turn_store = TurnStore(plugin_data_path, session_id)
+        if store_cleanup is not None:
+            store_cleanup.register(lineage_store)
+            store_cleanup.register(turn_store)
         return DialogueController(
             control_plane=control_plane,
             lineage_store=lineage_store,
@@ -100,6 +118,7 @@ def _build_delegation_factory(
     control_plane: ControlPlane,
     runtime_registry: ExecutionRuntimeRegistry,
     journal: OperationJournal,
+    store_cleanup: _SessionStoreCleanupRegistry | None = None,
 ) -> Callable[[], DelegationController]:
     """Return a zero-arg factory that builds a DelegationController on first call.
 
@@ -120,6 +139,8 @@ def _build_delegation_factory(
         session_id = _read_session_id(plugin_data_path)
         job_store = DelegationJobStore(plugin_data_path, session_id)
         lineage_store = LineageStore(plugin_data_path, session_id)
+        if store_cleanup is not None:
+            store_cleanup.register(lineage_store)
         pending_request_store = PendingRequestStore(plugin_data_path, session_id)
         artifact_store = ArtifactStore(
             plugin_data_path,
@@ -192,6 +213,7 @@ def main() -> None:
     )
 
     runtime_registry = ExecutionRuntimeRegistry()
+    store_cleanup = _SessionStoreCleanupRegistry()
 
     server = McpServer(
         control_plane=control_plane,
@@ -199,15 +221,18 @@ def main() -> None:
             plugin_data_path=plugin_data_path,
             control_plane=control_plane,
             journal=journal,
+            store_cleanup=store_cleanup,
         ),
         delegation_factory=_build_delegation_factory(
             plugin_data_path=plugin_data_path,
             control_plane=control_plane,
             runtime_registry=runtime_registry,
             journal=journal,
+            store_cleanup=store_cleanup,
         ),
     )
     server.run()
+    store_cleanup.cleanup_all()
 
 
 if __name__ == "__main__":

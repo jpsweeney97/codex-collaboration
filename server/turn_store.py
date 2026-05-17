@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +37,7 @@ class TurnStore:
         self._store_dir = plugin_data_path / "turns" / session_id
         self._store_dir.mkdir(parents=True, exist_ok=True)
         self._store_path = self._store_dir / "turn_metadata.jsonl"
+        self._cache: dict[str, int] | None = None
 
     def write(
         self,
@@ -54,6 +56,7 @@ class TurnStore:
             f.write(json.dumps(record, sort_keys=True) + "\n")
             f.flush()
             os.fsync(f.fileno())
+        self._cache = None
 
     def get(self, collaboration_id: str, *, turn_sequence: int) -> int | None:
         """Return context_size for a specific turn, or None if not found."""
@@ -95,7 +98,16 @@ class TurnStore:
         _, diagnostics = replay_jsonl(self._store_path, _turn_callback)
         return diagnostics
 
+    def cleanup(self) -> None:
+        """Remove the session directory. Called on session end."""
+        if self._store_dir.exists():
+            shutil.rmtree(self._store_dir)
+        self._cache = None
+
     def _replay(self) -> dict[str, int]:
         """Replay JSONL log. Last record per key wins."""
+        if self._cache is not None:
+            return dict(self._cache)
         results, _ = replay_jsonl(self._store_path, _turn_callback)
-        return dict(results)
+        self._cache = dict(results)
+        return dict(self._cache)

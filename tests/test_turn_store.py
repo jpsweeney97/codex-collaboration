@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+import server.turn_store as turn_store_module
 from server.turn_store import TurnStore
 
 
@@ -55,6 +56,43 @@ class TestWriteAndGet:
         store = TurnStore(tmp_path, "sess-1")
         store.write("collab-1", turn_sequence=1, context_size=4096)
         assert len(fsynced_fds) == 1
+
+    def test_replay_cache_reuses_reads_and_invalidates_on_write(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        store = TurnStore(tmp_path, "sess-1")
+        store.write("collab-1", turn_sequence=1, context_size=10)
+        replay_calls = 0
+        original_replay_jsonl = turn_store_module.replay_jsonl
+
+        def tracking_replay_jsonl(*args: object, **kwargs: object) -> object:
+            nonlocal replay_calls
+            replay_calls += 1
+            return original_replay_jsonl(*args, **kwargs)
+
+        monkeypatch.setattr(turn_store_module, "replay_jsonl", tracking_replay_jsonl)
+
+        assert store.get("collab-1", turn_sequence=1) == 10
+        assert store.get("collab-1", turn_sequence=1) == 10
+        assert replay_calls == 1
+
+        store.write("collab-1", turn_sequence=1, context_size=20)
+        assert store.get("collab-1", turn_sequence=1) == 20
+        assert replay_calls == 2
+
+
+class TestCleanup:
+    def test_cleanup_removes_session_directory(self, tmp_path: Path) -> None:
+        store = TurnStore(tmp_path, "sess-1")
+        store.write("collab-1", turn_sequence=1, context_size=4096)
+        session_dir = tmp_path / "turns" / "sess-1"
+        assert session_dir.exists()
+        store.cleanup()
+        assert not session_dir.exists()
+
+    def test_cleanup_is_safe_when_no_data(self, tmp_path: Path) -> None:
+        store = TurnStore(tmp_path, "sess-1")
+        store.cleanup()
 
 
 class TestCrashRecovery:

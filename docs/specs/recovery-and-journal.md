@@ -189,6 +189,8 @@ Unknown requests are **never auto-approved**. This is the fail-closed default: n
 
 No `action: escalate` [audit event](contracts.md#auditevent) is emitted for unknown terminalization. Terminal evidence is the persisted request record plus `DelegationOutcomeRecord(outcome_type="delegation_terminal", terminal_status="unknown")`.
 
+Unknown terminalization continues to use the persisted `PendingServerRequest(kind="unknown")` plus `DelegationOutcomeRecord(terminal_status="unknown")` as its provenance record. It does not emit an `AuditEvent` unless a later ADR changes the AuditEvent-vs-OutcomeRecord split.
+
 [T-20260429-02](../../../tickets/2026-04-29-codex-collaboration-unsupported-server-request-reachability.md) classifies each unsupported App Server method individually — methods may be promoted to the parkable/supported set, proven as intentionally safe-terminal, or proven non-reachable in current flows.
 
 ## Concurrency Limits
@@ -222,8 +224,11 @@ Canonical retention values. TTL triggers vary by resource: see the Trigger colum
 | Failed/crashed worktree | 24 hours | After crash detection or failure |
 | Audit log records (`events.jsonl`) | 30 days | From event timestamp |
 | Outcome records (`outcomes.jsonl`) | 30 days | From event timestamp |
+| Lineage/turn session stores | Session end | Normal `server.run()` return cleans registered directories |
 | Advisory runtime | Session end | Claude session termination |
 | Abandoned sessions | Next startup | Scan for orphaned runtimes/worktrees |
 | Diff/test summary | Survives worktree cleanup | Retained in `${CLAUDE_PLUGIN_DATA}` after worktree removal |
 
 The diff/test summary is explicitly retained after worktree cleanup so that delegation history remains inspectable even after the worktree is removed.
+
+Lineage and turn session-store cleanup is a normal-exit action only. Bootstrap registers lazily constructed stores and deduplicates them by session directory, then removes the registered directories after `server.run()` returns. In-process server exceptions, hard crashes, process kills, and machine shutdowns preserve these stores for recovery and forensic inspection until a separate startup-prune owner is specified.
