@@ -55,6 +55,8 @@ authority: foundation
 
 The plugin uses a split-runtime model with separate App Server processes for advisory and execution work. Claude never interacts with App Server directly — a control plane mediates all requests.
 
+`scripts/` may import from `server/`, but `server/` must never import from `scripts/`. `scripts/` is the host/bootstrap edge; `server/` is the importable core. This one-directional layering currently holds with zero reverse imports.
+
 ```mermaid
 flowchart LR
     U["User in Claude Code"] --> S["Claude skill surface"]

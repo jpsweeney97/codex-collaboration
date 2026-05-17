@@ -50,6 +50,40 @@ def _patch_bootstrap_run(
     return runs
 
 
+@pytest.fixture(autouse=True)
+def _bootstrap_compat_passes_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Default the startup compat check to pass for every bootstrap test.
+
+    Explicit + autouse (not buried in _patch_bootstrap_run) so the coupling is
+    visible. `_import_bootstrap()` returns a fresh module on every call, so this
+    fixture patches the module instance it creates and then monkeypatches the
+    test-local helper to return that same module for the rest of the test.
+    raising=True is safe here: this runs at test-setup time, after Step 3's
+    `from server.codex_compat import check_live_runtime_compatibility` has made
+    the symbol an attribute of the bootstrap module. Tests that exercise the
+    compat path (TestBootstrapCodexCompatPreflight) re-monkeypatch the same
+    symbol in the test body, which runs after fixture setup and wins.
+    """
+    mod = _import_bootstrap()
+
+    def _pass() -> object:
+        return type(
+            "R",
+            (),
+            {
+                "passed": True,
+                "codex_version": None,
+                "errors": (),
+                "available_methods": frozenset(),
+            },
+        )()
+
+    monkeypatch.setattr(mod, "check_live_runtime_compatibility", _pass)
+    monkeypatch.setattr(sys.modules[__name__], "_import_bootstrap", lambda: mod)
+
+
 class TestReadSessionId:
     """Tests for _read_session_id from the bootstrap script."""
 
@@ -285,6 +319,103 @@ class TestBootstrapRetentionPrune:
             mod.main()
 
 
+class TestBootstrapCodexCompatPreflight:
+    def test_bootstrap_runs_compat_check_before_server_run(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        mod = _import_bootstrap()
+        runs = _patch_bootstrap_run(monkeypatch, mod, tmp_path)
+        calls: list[str] = []
+
+        def compat_pass() -> object:
+            calls.append("compat")
+            return type(
+                "R",
+                (),
+                {
+                    "passed": True,
+                    "codex_version": None,
+                    "errors": (),
+                    "available_methods": frozenset(),
+                },
+            )()
+
+        # raising=True is intentional. Pre-implementation the bootstrap module
+        # does not import check_live_runtime_compatibility, so this raises
+        # AttributeError — that IS the expected Step 2 red. Once Step 3 adds the
+        # import the patch binds; thereafter a typo in the symbol name fails
+        # loudly instead of silently no-op'ing (the raising=False trap).
+        monkeypatch.setattr(mod, "check_live_runtime_compatibility", compat_pass)
+
+        mod.main()
+
+        assert calls == ["compat"]
+        assert len(runs) == 1
+
+    def test_bootstrap_exits_before_server_run_when_compat_fails(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        mod = _import_bootstrap()
+        runs = _patch_bootstrap_run(monkeypatch, mod, tmp_path)
+
+        def compat_fail() -> object:
+            return type(
+                "R",
+                (),
+                {
+                    "passed": False,
+                    "codex_version": None,
+                    "errors": ("Codex binary not found on PATH",),
+                    "available_methods": frozenset(),
+                },
+            )()
+
+        monkeypatch.setattr(mod, "check_live_runtime_compatibility", compat_fail)
+
+        with pytest.raises(RuntimeError, match="Codex startup compatibility failed"):
+            mod.main()
+
+        assert runs == []
+
+    def test_bootstrap_preserves_live_control_plane_compat_checker(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        mod = _import_bootstrap()
+        created_kwargs: list[dict[str, object]] = []
+
+        mod.check_live_runtime_compatibility = lambda: type(
+            "R",
+            (),
+            {
+                "passed": True,
+                "codex_version": None,
+                "errors": (),
+                "available_methods": frozenset(),
+            },
+        )()
+
+        class _FakeControlPlane:
+            def __init__(self, **kwargs: object) -> None:
+                created_kwargs.append(kwargs)
+
+        monkeypatch.setattr(mod, "default_plugin_data_path", lambda: tmp_path)
+        monkeypatch.setattr(mod, "ControlPlane", _FakeControlPlane)
+        monkeypatch.setattr(mod.McpServer, "run", lambda self: None)
+
+        mod.main()
+
+        assert len(created_kwargs) == 1
+        assert created_kwargs[0]["plugin_data_path"] == tmp_path
+        assert "journal" in created_kwargs[0]
+        assert "compat_checker" not in created_kwargs[0]
+
+
 class TestPublishSessionIdHook:
     """Tests for the SessionStart hook script."""
 
@@ -313,6 +444,37 @@ class TestPublishSessionIdHook:
             timeout=5,
         )
         assert (tmp_path / "session_id").read_text(encoding="utf-8") == "new-session"
+
+    def test_warns_when_recent_different_session_id_exists(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "session_id").write_text("old-session", encoding="utf-8")
+        payload = json.dumps({"session_id": "new-session"})
+        result = subprocess.run(
+            [sys.executable, str(_hook_path)],
+            input=payload,
+            capture_output=True,
+            text=True,
+            env={**os.environ, "CLAUDE_PLUGIN_DATA": str(tmp_path)},
+            timeout=5,
+        )
+        assert result.returncode == 0
+        assert "concurrent session warning" in result.stderr
+        assert (tmp_path / "session_id").read_text(encoding="utf-8") == "new-session"
+
+    def test_no_warning_when_recent_session_id_is_same(self, tmp_path: Path) -> None:
+        (tmp_path / "session_id").write_text("same-session", encoding="utf-8")
+        payload = json.dumps({"session_id": "same-session"})
+        result = subprocess.run(
+            [sys.executable, str(_hook_path)],
+            input=payload,
+            capture_output=True,
+            text=True,
+            env={**os.environ, "CLAUDE_PLUGIN_DATA": str(tmp_path)},
+            timeout=5,
+        )
+        assert result.returncode == 0
+        assert "concurrent session warning" not in result.stderr
 
     def test_noop_without_plugin_data_env(self) -> None:
         payload = json.dumps({"session_id": "sess-noop"})

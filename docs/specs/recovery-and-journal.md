@@ -120,6 +120,7 @@ An audit event is emitted for every state transition that crosses a trust or cap
 | Escalation denied | `deny` | `job_id`, `request_id`, `decision` |
 | Escalation surfaced | `escalate` | `collaboration_id`, `job_id`, `request_id` |
 | Promotion completed | `promote` | `job_id`, `decision` |
+| Promotion rolled back after post-apply verification failed | `rollback` | `collaboration_id`, `job_id`, `runtime_id` |
 | Result discarded | `discard` | `job_id` |
 | Server request timed out | `approval_timeout` | `job_id`, `request_id` |
 | Parked request aborted internally | `internal_abort` | `job_id`, `request_id` |

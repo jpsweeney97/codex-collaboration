@@ -62,6 +62,17 @@ def _content_bearing_tools() -> set[str]:
     }
 
 
+def test_policy_map_keys_share_one_mcp_prefix() -> None:
+    from server.tool_prefix import TOOL_PREFIX
+
+    unexpected = sorted(
+        tool_name
+        for tool_name in _TOOL_POLICY_MAP
+        if not tool_name.startswith(TOOL_PREFIX)
+    )
+    assert unexpected == []
+
+
 def test_hooks_matcher_covers_every_content_bearing_mcp_tool() -> None:
     """Every tool with non-empty content_fields must invoke codex_guard.
 

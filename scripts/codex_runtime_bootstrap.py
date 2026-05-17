@@ -26,6 +26,7 @@ if str(_package_root) not in sys.path:
     sys.path.insert(0, str(_package_root))
 
 from server.artifact_store import ArtifactStore  # noqa: E402
+from server.codex_compat import check_live_runtime_compatibility  # noqa: E402
 from server.control_plane import ControlPlane  # noqa: E402
 from server.delegation_controller import DelegationController  # noqa: E402
 from server.delegation_job_store import DelegationJobStore  # noqa: E402
@@ -177,6 +178,13 @@ def main() -> None:
             logger.warning(summary_msg, *summary_args)
         else:
             logger.info(summary_msg, *summary_args)
+
+    compat_result = check_live_runtime_compatibility()
+    if not compat_result.passed:
+        raise RuntimeError(
+            "Codex startup compatibility failed: "
+            f"{'; '.join(compat_result.errors)}. Got: {compat_result.codex_version!r:.100}"
+        )
 
     control_plane = ControlPlane(
         plugin_data_path=plugin_data_path,

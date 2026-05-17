@@ -60,7 +60,7 @@ def test_announce_parked_wakes_main_thread() -> None:
     time.sleep(0.05)
     reg.announce_parked("j1", request_id="r1")
     t.join(timeout=3.0)
-    assert not t.is_alive()
+    assert not t.is_alive(), f"worker thread still alive; result={result!r}"
     assert len(result) == 1
     assert isinstance(result[0], Parked)
     assert result[0].request_id == "r1"
@@ -78,7 +78,7 @@ def test_announce_turn_completed_empty_surfaces_variant() -> None:
     time.sleep(0.05)
     reg.announce_turn_completed_empty("j1")
     t.join(timeout=3.0)
-    assert not t.is_alive()
+    assert not t.is_alive(), f"worker thread still alive; result={result!r}"
     assert isinstance(result[0], TurnCompletedWithoutCapture)
 
 
@@ -96,7 +96,7 @@ def test_announce_turn_terminal_without_escalation() -> None:
         "j1", status="unknown", reason="unknown_kind_parse_failure", request_id="r-audit"
     )
     t.join(timeout=3.0)
-    assert not t.is_alive()
+    assert not t.is_alive(), f"worker thread still alive; result={result!r}"
     assert isinstance(result[0], TurnTerminalWithoutEscalation)
     assert result[0].job_status == "unknown"
     assert result[0].reason == "unknown_kind_parse_failure"
@@ -115,7 +115,7 @@ def test_announce_worker_failed_surfaces_exception() -> None:
     time.sleep(0.05)
     reg.announce_worker_failed("j1", error=RuntimeError("boom"))
     t.join(timeout=3.0)
-    assert not t.is_alive()
+    assert not t.is_alive(), f"worker thread still alive; result={result!r}"
     assert isinstance(result[0], WorkerFailed)
     assert isinstance(result[0].error, RuntimeError)
 
@@ -159,8 +159,8 @@ def test_capture_ready_channels_are_per_job() -> None:
     reg.announce_turn_completed_empty("j2")
     t1.join(timeout=3.0)
     t2.join(timeout=3.0)
-    assert not t1.is_alive()
-    assert not t2.is_alive()
+    assert not t1.is_alive(), f"first worker still alive; results={results!r}"
+    assert not t2.is_alive(), f"second worker still alive; results={results!r}"
     assert isinstance(results["j1"], Parked)
     assert isinstance(results["j2"], TurnCompletedWithoutCapture)
 
@@ -187,7 +187,7 @@ def test_wait_for_parked_duplicate_job_id_raises() -> None:
     # Cleanup: wake the first wait so the test suite does not hang.
     reg.announce_turn_completed_empty("j1")
     t1.join(timeout=3.0)
-    assert not t1.is_alive()
+    assert not t1.is_alive(), "first worker still alive after duplicate wait cleanup"
 
 
 # --------------------------------------------------------------- pre-open tests
@@ -240,7 +240,7 @@ def test_open_then_wait_then_announce_works() -> None:
     time.sleep(0.05)
     reg.announce_parked("j1", request_id="r-late")
     t.join(timeout=3.0)
-    assert not t.is_alive()
+    assert not t.is_alive(), f"worker thread still alive; result={result!r}"
     assert len(result) == 1
     assert isinstance(result[0], Parked)
     assert result[0].request_id == "r-late"
@@ -280,7 +280,7 @@ def test_open_then_double_wait_raises_duplicate_waiter() -> None:
     # Cleanup so the suite does not hang on the first wait.
     reg.announce_turn_completed_empty("j1")
     t1.join(timeout=3.0)
-    assert not t1.is_alive()
+    assert not t1.is_alive(), "first worker still alive after duplicate wait cleanup"
 
 
 def test_open_then_announce_buffers_all_outcome_variants() -> None:

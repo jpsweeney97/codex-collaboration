@@ -18,7 +18,7 @@ pytestmark = pytest.mark.skipif(
 
 
 def test_codex_status_live_reports_runtime_surface(tmp_path: Path) -> None:
-    repo_root = Path(__file__).resolve().parents[4]
+    repo_root = Path(__file__).resolve().parents[1]
     plane = ControlPlane(plugin_data_path=tmp_path / "plugin-data")
     try:
         status = plane.codex_status(repo_root)

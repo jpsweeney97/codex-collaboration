@@ -93,7 +93,7 @@ def test_commit_signal_wakes_worker_wait() -> None:
     assert token is not None
     reg.commit_signal(token)
     t.join(timeout=2.0)
-    assert not t.is_alive()
+    assert not t.is_alive(), f"worker thread still alive; result={result!r}"
     assert len(result) == 1
     assert isinstance(result[0], DecisionResolution)
     assert result[0].payload == {"decision": "accept"}
@@ -134,7 +134,7 @@ def test_signal_internal_abort_wakes_worker_with_abort() -> None:
     returned = reg.signal_internal_abort("r1", reason="parked_projection_invariant_violation")
     assert returned is True
     t.join(timeout=2.0)
-    assert not t.is_alive()
+    assert not t.is_alive(), f"worker thread still alive; result={result!r}"
     assert len(result) == 1
     assert isinstance(result[0], InternalAbort)
     assert result[0].reason == "parked_projection_invariant_violation"
@@ -181,7 +181,7 @@ def test_timer_fires_synthetic_timeout_resolution() -> None:
     t = threading.Thread(target=worker)
     t.start()
     t.join(timeout=2.0)
-    assert not t.is_alive()
+    assert not t.is_alive(), f"worker thread still alive; result={result!r}"
     assert len(result) == 1
     assert isinstance(result[0], DecisionResolution)
     assert result[0].is_timeout is True
@@ -211,11 +211,11 @@ def test_late_timer_against_decided_entry_is_noop() -> None:
     assert token is not None
     reg.commit_signal(token)
     t.join(timeout=2.0)
-    assert not t.is_alive()
+    assert not t.is_alive(), f"worker thread still alive; result={result!r}"
     assert len(result) == 1
     assert result[0] == operator_resolution
     # Now wait for the would-be late timer to fire — must be a no-op.
-    time.sleep(0.7)
+    time.sleep(1.0)
     # Worker received exactly one resolution (no double-wake).
     assert len(result) == 1
     assert result[0] == operator_resolution
@@ -275,6 +275,6 @@ def test_stale_token_after_discard_and_reregister_is_rejected() -> None:
     # (not the stale old one).
     reg.commit_signal(new_token)
     t.join(timeout=2.0)
-    assert not t.is_alive()
+    assert not t.is_alive(), f"worker thread still alive; result={result!r}"
     assert len(result) == 1
     assert result[0] == new_resolution
