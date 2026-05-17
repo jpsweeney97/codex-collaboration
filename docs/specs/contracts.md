@@ -193,7 +193,7 @@ Append-only event record for human reconstruction and diagnostics. Write behavio
 | `actor` | enum | `claude`, `codex`, `user`, `system` |
 | `action` | enum | See [action values](#audit-event-actions) |
 | `collaboration_id` | string | Associated collaboration |
-| `runtime_id` | string | Runtime that the event occurred in. For a recovery-inferred `crash` on the `operation_journal` subject whose entry recorded no runtime, the documented sentinel `recovery:unknown-runtime` (see [recovery-and-journal.md §Recovery-Inferred Crash/Restart Audit](recovery-and-journal.md#recovery-inferred-crashrestart-audit)) |
+| `runtime_id` | string | Runtime that the event occurred in. For a recovery-inferred `crash` where no runtime was ever recorded for the subject, the documented sentinel `recovery:unknown-runtime` under the exact two-case sentinel invariant (see [recovery-and-journal.md §Recovery-Inferred Crash/Restart Audit](recovery-and-journal.md#recovery-inferred-crashrestart-audit)) |
 | `policy_fingerprint` | string? | Runtime policy fingerprint at event time |
 | `job_id` | string? | Delegation job (for execution-domain events) |
 | `request_id` | string? | Associated [PendingServerRequest](#pendingserverrequest) |
@@ -222,7 +222,7 @@ Richer analytics and provenance fields (artifact hashes, terminal statuses, work
 | `approval_timeout` | execution | `system` | Server request timed out without resolution. Carries `job_id` and `request_id`. |
 | `internal_abort` | execution | `system` | Parked server request aborted internally (e.g., job cancellation while waiting for operator decision). Carries `job_id` and `request_id`. |
 | `dispatch_failed` | execution | `system` | Operator decision was made but dispatch to App Server failed. Carries `job_id` and `request_id`. |
-| `crash` | both | `system` | Startup recovery detected residual state implying a prior runtime interruption (only when a dispatch actually occurred — never-dispatched `intent` reconciliations emit nothing). Recovery-inferred — carries `extra.detected_during="startup_recovery"` and makes no claim about the original crash time. May stand alone. **Spec-normative ahead of source** per the HL2 plan; runtime emission lands with `DEBT-20260517-HL2-CRASH-RESTART-AUDIT` Task 2.2. See [recovery-and-journal.md §Recovery-Inferred Crash/Restart Audit](recovery-and-journal.md#recovery-inferred-crashrestart-audit). |
+| `crash` | both | `system` | Startup recovery reconciled in-flight/dispatched state implying a prior runtime interruption (only non-no-op reconciliations per the crash precondition; pure no-ops emit nothing). Recovery-inferred — carries `extra.detected_during="startup_recovery"` and makes no claim about the original crash time. May stand alone. **Spec-normative ahead of source** per the HL2 plan; runtime emission lands with `DEBT-20260517-HL2-CRASH-RESTART-AUDIT` Task 2.2. See [recovery-and-journal.md §Recovery-Inferred Crash/Restart Audit](recovery-and-journal.md#recovery-inferred-crashrestart-audit). |
 | `restart` | both | `system` | A runtime was actually reattached/resumed for a subject during startup recovery. Links to its `crash` via `extra.crash_recovery_key`. Not emitted for detect-and-quarantine outcomes. **Spec-normative ahead of source** per the HL2 plan; runtime emission lands with `DEBT-20260517-HL2-CRASH-RESTART-AUDIT` Task 2.2. See [recovery-and-journal.md §Recovery-Inferred Crash/Restart Audit](recovery-and-journal.md#recovery-inferred-crashrestart-audit). |
 
 **Reserved (not currently emitted):**
