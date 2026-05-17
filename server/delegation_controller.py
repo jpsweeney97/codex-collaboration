@@ -59,6 +59,7 @@ import logging
 import os
 import subprocess
 import tempfile
+import threading
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -284,6 +285,12 @@ class _ServerRequestHandlerState:
     captured_request_parse_failed: bool = False
 
 
+@dataclass(frozen=True)
+class WorkerDrainResult:
+    joined_thread_names: tuple[str, ...]
+    alive_thread_names: tuple[str, ...]
+
+
 class _ControlPlaneLike(Protocol):
     def start_execution_runtime(
         self, worktree_path: Path
@@ -445,6 +452,7 @@ class DelegationController:
             else approval_window_seconds
         )
         self._registry: ResolutionRegistry = ResolutionRegistry()
+        self._worker_threads: list[threading.Thread] = []
 
     def start(
         self,
@@ -809,7 +817,7 @@ class DelegationController:
         # below consumes the pre-opened channel and returns immediately
         # if an announce_* arrived before it was reached.
         self._registry.open_capture_channel(job_id)
-        spawn_worker(
+        worker_thread = spawn_worker(
             controller=self,
             registry=self._registry,
             job_id=job_id,
@@ -818,6 +826,7 @@ class DelegationController:
             worktree_path=worktree_path,
             prompt_text=prompt_text,
         )
+        self._worker_threads.append(worker_thread)
         outcome = self._registry.wait_for_parked(
             job_id, timeout_seconds=START_OUTCOME_WAIT_SECONDS
         )
@@ -825,6 +834,23 @@ class DelegationController:
             outcome=outcome,
             job_id=job_id,
             collaboration_id=collaboration_id,
+        )
+
+    def drain_workers(self, timeout: float = 5.0) -> WorkerDrainResult:
+        joined: list[str] = []
+        alive: list[str] = []
+        remaining: list[threading.Thread] = []
+        for thread in list(self._worker_threads):
+            thread.join(timeout=timeout)
+            if thread.is_alive():
+                alive.append(thread.name)
+                remaining.append(thread)
+            else:
+                joined.append(thread.name)
+        self._worker_threads = remaining
+        return WorkerDrainResult(
+            joined_thread_names=tuple(joined),
+            alive_thread_names=tuple(alive),
         )
 
     def _dispatch_parked_capture_outcome(

@@ -16,6 +16,7 @@ See delivery.md §Plugin Component Structure for the normative location.
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from pathlib import Path
 from typing import Callable
@@ -41,6 +42,23 @@ from server.worktree_manager import WorktreeManager  # noqa: E402
 
 
 logger = logging.getLogger(__name__)
+_LOG_LEVEL_ENV = "CODEX_COLLAB_LOG_LEVEL"
+_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+
+
+def _configure_logging() -> None:
+    raw_level = os.environ.get(_LOG_LEVEL_ENV, "WARNING").upper()
+    level = logging.getLevelNamesMapping().get(raw_level, logging.WARNING)
+    root_logger = logging.getLogger()
+    root_logger.setLevel(level)
+    logging.basicConfig(level=level, format=_LOG_FORMAT)
+    for handler in root_logger.handlers:
+        handler.setLevel(level)
+    if level == logging.WARNING and raw_level not in logging.getLevelNamesMapping():
+        logger.warning(
+            "invalid CODEX_COLLAB_LOG_LEVEL; falling back to WARNING. Got: %r",
+            raw_level,
+        )
 
 
 class _SessionStoreCleanupRegistry:
@@ -164,7 +182,9 @@ def _build_delegation_factory(
 
 
 def main() -> None:
+    _configure_logging()
     plugin_data_path = default_plugin_data_path()
+    logger.info("plugin data path resolved: %s", plugin_data_path)
     journal = OperationJournal(plugin_data_path)
     try:
         summary = journal.prune_audit_logs()

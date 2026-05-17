@@ -6,7 +6,6 @@ import hashlib
 import json
 import logging
 import subprocess
-import threading
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -1215,14 +1214,27 @@ def test_decide_reescalation_uses_pending_escalation_key(tmp_path: Path) -> None
     # No internal IDs leaked.
     _assert_no_internal_ids(poll_payload, "pending_escalation")
 
-    # Drain the rid=99 worker park so the daemon thread exits before the
-    # next test runs (see Round-6 addendum on cross-test thread leakage).
-    controller._registry.signal_internal_abort("99", reason="test_teardown_drain")
-    worker_threads = [
-        t for t in threading.enumerate() if t.name == f"delegation-worker-{job_id}"
-    ]
-    for t in worker_threads:
-        t.join(timeout=5.0)
+    # Resolve the rid=99 worker park through the public tool path so the worker
+    # reaches a protocol-level exit condition before drain.
+    cleanup_response = server.handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "tools/call",
+            "params": {
+                "name": "codex.delegate.decide",
+                "arguments": {
+                    "job_id": job_id,
+                    "request_id": "99",
+                    "decision": "deny",
+                },
+            },
+        }
+    )
+    cleanup_payload = json.loads(cleanup_response["result"]["content"][0]["text"])
+    assert cleanup_payload["decision_accepted"] is True
+    drain = controller.drain_workers(timeout=5.0)
+    assert drain.alive_thread_names == ()
 
 
 # -----------------------------------------------------------------------------

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import subprocess
 import sys
+from io import StringIO
 from pathlib import Path
 
 import pytest
@@ -179,6 +181,77 @@ class TestBuildDialogueFactory:
 
 
 class TestBootstrapRetentionPrune:
+    def test_main_configures_logging_before_resolving_plugin_data_path(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        mod = _import_bootstrap()
+        calls: list[str] = []
+
+        def configure_logging() -> None:
+            calls.append("configure_logging")
+
+        def resolve_plugin_data_path() -> Path:
+            calls.append("default_plugin_data_path")
+            return tmp_path
+
+        monkeypatch.setattr(mod, "_configure_logging", configure_logging)
+        monkeypatch.setattr(mod, "default_plugin_data_path", resolve_plugin_data_path)
+        monkeypatch.setattr(mod.McpServer, "run", lambda self: None)
+
+        mod.main()
+
+        assert calls[:2] == ["configure_logging", "default_plugin_data_path"]
+
+    def test_info_log_level_makes_plugin_data_path_visible_with_existing_handler(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        mod = _import_bootstrap()
+        runs = _patch_bootstrap_run(monkeypatch, mod, tmp_path)
+        monkeypatch.setenv("CODEX_COLLAB_LOG_LEVEL", "INFO")
+        stream = StringIO()
+        handler = logging.StreamHandler(stream)
+        handler.setLevel(logging.WARNING)
+        root_logger = logging.getLogger()
+        old_root_level = root_logger.level
+        root_logger.addHandler(handler)
+        try:
+            mod.main()
+        finally:
+            root_logger.removeHandler(handler)
+            root_logger.setLevel(old_root_level)
+
+        assert len(runs) == 1
+        assert f"plugin data path resolved: {tmp_path}" in stream.getvalue()
+
+    def test_invalid_log_level_falls_back_to_warning_without_crashing(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        mod = _import_bootstrap()
+        runs = _patch_bootstrap_run(monkeypatch, mod, tmp_path)
+        monkeypatch.setenv("CODEX_COLLAB_LOG_LEVEL", "verbose")
+        stream = StringIO()
+        handler = logging.StreamHandler(stream)
+        root_logger = logging.getLogger()
+        old_root_level = root_logger.level
+        root_logger.addHandler(handler)
+        try:
+            mod.main()
+        finally:
+            root_logger.removeHandler(handler)
+            root_logger.setLevel(old_root_level)
+
+        assert len(runs) == 1
+        assert (
+            "invalid CODEX_COLLAB_LOG_LEVEL; falling back to WARNING. "
+            "Got: 'VERBOSE'"
+        ) in stream.getvalue()
+
     def test_bootstrap_logs_info_summary_when_prune_succeeds_with_zero_malformed(
         self,
         tmp_path: Path,
@@ -187,6 +260,7 @@ class TestBootstrapRetentionPrune:
     ) -> None:
         mod = _import_bootstrap()
         runs = _patch_bootstrap_run(monkeypatch, mod, tmp_path)
+        monkeypatch.setenv("CODEX_COLLAB_LOG_LEVEL", "INFO")
 
         with caplog.at_level("INFO"):
             mod.main()
