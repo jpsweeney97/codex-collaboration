@@ -30,22 +30,24 @@ The honest identity available to recovery is whatever the *subject* itself recor
 
 | `recovery_subject` | stem | events | `runtime_id` source | `recovery_result` |
 |---|---|---|---|---|
-| `lineage_handle` | `lineage_handle:{collaboration_id}` | `crash`+`restart` co-emitted at reattach success | `crash`: handle's pre-reattach (dead) `runtime_id`; `restart`: new resumed `runtime_id` | `handle_reattached` |
-| `lineage_handle` | `lineage_handle:{collaboration_id}` | `crash` only (reattach failed → `unknown`) | handle's pre-reattach `runtime_id` (real, required) | `handle_quarantined_unknown` |
+| `lineage_handle` | `lineage_handle:{collaboration_id}` | `crash`+`restart` co-emitted at reattach success | `crash`: pre-existing handle's `runtime_id`, or the sentinel below when the handle was *created during recovery* from a runtime-less `thread_creation` entry; `restart`: new resumed `runtime_id` (always real) | `handle_reattached` |
+| `lineage_handle` | `lineage_handle:{collaboration_id}` | `crash` only (reattach failed → `unknown`) | pre-existing handle's `runtime_id` (real, required) | `handle_quarantined_unknown` |
 | `orphaned_active_job` | `orphaned_active_job:{job_id}` | `crash` only | `DelegationJob.runtime_id` (real, required, now dead) | `job_marked_unknown` |
-| `operation_journal` | `operation_journal:{operation}:{idempotency_key}` | `crash` only (journal reconciled, no reattached handle) | `entry.runtime_id` if recorded, else the sentinel below | `journal_reconciled` |
+| `operation_journal` | `operation_journal:{operation}:{idempotency_key}` | `crash` only — **`dispatched`-phase entries only**, no reattached handle (delegation `job_creation`/`approval_resolution` reconciles) | `entry.runtime_id` if recorded, else the sentinel below | `journal_reconciled` |
 
 `recovery_key = "{stem}:{action}"`. A `restart` always carries `extra["crash_recovery_key"]` pointing at the **same subject's** crash recovery key — so the forensic link the owner doc wanted is true by construction, never dangling. `crash` may stand alone (quarantine paths have no restart).
 
 **Precedence rule (no double-crash for one incident):** if recovery reattaches a handle, the incident is recorded on the `lineage_handle` subject; we do **not** also emit a separate `operation_journal` crash for that same handle's driving entry. The entry's `operation`/`phase` ride along in `extra` (`recovery_operation`, `recovery_phase`). `operation_journal` crash covers only reconciled operations with **no** reattached handle — in practice the delegation `job_creation`/`approval_resolution` reconciles, which never reattach (delegation crash recovery quarantines to `unknown` by policy).
 
+**Crash precondition (no crash for never-dispatched work):** `crash` is emitted only when residual state implies a dispatch actually occurred — a journal entry whose terminal unresolved `phase == "dispatched"`, an orphaned active job in `running`/`needs_escalation`, or a lineage handle whose thread was dispatched. A terminal unresolved `phase == "intent"` means dispatch never happened (per the operation-journal write-ordering contract: intent is journaled *before* dispatch); it is reconciled silently with **no** `crash` and **no** `restart`, for every operation (`thread_creation`, `turn_dispatch`, `job_creation`, `approval_resolution`, `promotion`). Emitting `crash` for an intent-only reconciliation would be a false forensic record asserting a runtime interruption that provably did not occur.
+
 ### Identity shape — no schema change, narrow sentinel
 
-`collaboration_id` is always real: `OperationJournalEntry`, `CollaborationHandle`, and `DelegationJob` each carry a required non-empty `collaboration_id`. `runtime_id` is real for `lineage_handle` (required on the handle) and `orphaned_active_job` (required on `DelegationJob`). The **only** path that can lack a runtime identity is `operation_journal` whose entry never recorded one.
+`collaboration_id` is always real: `OperationJournalEntry`, `CollaborationHandle`, and `DelegationJob` each carry a required non-empty `collaboration_id`. `runtime_id` is real for `orphaned_active_job` (required on `DelegationJob`) and for any `lineage_handle` whose handle pre-existed (`CollaborationHandle.runtime_id` is required). Two paths can lack a recorded runtime identity: an `operation_journal` entry that never recorded one, and a `lineage_handle` whose handle is *created during recovery* from a runtime-less `thread_creation` `dispatched` entry — the dispatched thread had no prior handle and the `thread_creation` entry carries no `runtime_id` (only `codex_thread_id`).
 
 Sentinel: `runtime_id = "recovery:unknown-runtime"`.
 
-**Sentinel invariant (exact):** appears **iff** `action="crash"` **and** `detected_during="startup_recovery"` **and** `recovery_subject="operation_journal"` **and** the driving entry recorded no `runtime_id`. Never on `restart`. Never on `lineage_handle` or `orphaned_active_job` (model-guaranteed real IDs). The sentinel is a truthful "this runtime was never identified," not a placeholder for a knowable value.
+**Sentinel invariant (exact):** appears **iff** `action="crash"` **and** `detected_during="startup_recovery"` **and** no runtime was ever recorded for the subject — exactly one of: (a) `recovery_subject="operation_journal"` and the driving entry recorded no `runtime_id`; (b) `recovery_subject="lineage_handle"` and the handle was *created during recovery* from a `thread_creation` `dispatched` entry that recorded no `runtime_id` (no pre-existing handle). Never on `restart` (the resumed runtime is always real). Never on `orphaned_active_job`, nor on a `lineage_handle` whose handle pre-existed (model-guaranteed real IDs). The sentinel is a truthful "this runtime was never identified," not a placeholder for a knowable value.
 
 ### Duplicate prevention
 
@@ -102,6 +104,7 @@ The plan is therefore patched in lockstep (not merely annotated): orphaned jobs 
 
 - **`recovery-and-journal.md`** — clean rewrite of the `crash`/`restart` trigger rows from reserved/runtime-level to the recovery-event model; rewrite of the Advisory Runtime Crash closing note ("restart links to its crash via `crash_recovery_key`; crash may stand alone"); new normative subsection carrying the three-subject table, sentinel invariant, dedup owner/key, `collaboration_id` invariant, emission ordering, and `extra`-by-subject. No "reserved/not emitted" language for `crash`/`restart` is left behind. `fork`/`rotate`/`freeze`/`reap` remain reserved.
 - **`contracts.md`** — move `crash`/`restart` from the Reserved table to Currently emitted (`actor="system"`), cross-referencing the recovery section; add the normative `extra` sub-contract exception for `action ∈ {crash, restart}`; note the `runtime_id` recovery sentinel.
+- **Status honesty** — specs are normative ahead of source (spec-first per the HL2 plan), so the `crash`/`restart` trigger rows in both owner docs carry an explicit "spec-normative ahead of source; emission lands with HL2 Task 2.2" qualifier. A reader of this docs commit is not misled into thinking the events are emitted at runtime yet. HL2 closeout removes the qualifier once Task 2.2 lands.
 
 ## Out of scope
 
@@ -112,10 +115,12 @@ No non-recovery, process-level crash trigger is invented — none exists in the 
 The implementation is correct when tests prove:
 
 1. Emitted events are `AuditEvent(action="crash"|"restart")`, not ad hoc dicts.
-2. `lineage_handle`: a successfully reattached advisory handle emits a `crash` (old runtime) + `restart` (new runtime) pair on the same stem; `restart.extra["crash_recovery_key"]` resolves to the emitted `crash`.
+2. `lineage_handle`: a successfully reattached advisory handle that pre-existed emits a `crash` (pre-existing runtime) + `restart` (new runtime) pair on the same stem; `restart.extra["crash_recovery_key"]` resolves to the emitted `crash`.
 3. `orphaned_active_job`: a persisted `running`/`needs_escalation` job whose `job_creation` journal entry is already `completed` emits `crash` only, `runtime_id == DelegationJob.runtime_id`, `recovery_result="job_marked_unknown"`.
-4. `operation_journal`: a reconciled entry with no recorded `runtime_id` emits `crash` with `runtime_id="recovery:unknown-runtime"` and the exact sentinel invariant holds; an entry with a recorded `runtime_id` uses it.
+4. `operation_journal`: a reconciled **`dispatched`-phase** entry with no recorded `runtime_id` emits `crash` with `runtime_id="recovery:unknown-runtime"`; one with a recorded `runtime_id` uses it; the exact sentinel invariant holds.
 5. Clean startup (no unresolved entries, no orphaned jobs, no stale handles) emits **no** `crash` and **no** `restart`.
 6. Recovery reached through both eager and lazy paths, and a retry after a failed lazy recovery, do not duplicate `crash` or `restart` (persisted `(action, recovery_key)` dedup; `collaboration_id`-keyed stem).
 7. Recovery failure before the reconciliation write emits nothing and never a false successful `restart`; the controller is not pinned.
 8. `append_recovery_audit_event_once` suppresses duplicate `(action, recovery_key)` pairs and allows distinct ones; it fails fast if `event.extra["recovery_key"]` disagrees with the `recovery_key` argument.
+9. `thread_creation:dispatched` with no pre-existing handle (crash between the `dispatched` journal write and lineage persist): recovery creates the handle and emits a `lineage_handle` `crash` with `runtime_id="recovery:unknown-runtime"` (sentinel case (b)) plus a `restart` carrying the real new resumed runtime; `restart.extra["crash_recovery_key"]` resolves.
+10. `thread_creation:intent` — and any `*:intent` terminal unresolved entry — is reconciled with **no** `crash` and **no** `restart` (dispatch never happened).
