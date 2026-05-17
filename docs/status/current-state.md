@@ -107,6 +107,9 @@ The main current watchpoints are:
 - Codex App Server version-pin upgrade (`T-20260516-01`)
 - Codex App Server contract-version assertion decision (`T-20260516-02`)
 - unsupported App Server request reachability / handling (`T-20260429-02`)
+- 2026-05-17 debt-audit active backlog (`DEBT-20260517-*` rows in the
+  reconciliation register; the audit is the source artifact, not the active
+  routing index)
 - Packet 1 carry-forward debt (`TT.1`, `RT.1`, `P1-MINOR-SWEEP`)
 - benchmark-carried follow-on work (`BMARK-L1-L3`)
 - open spec question `AUDIT-CONSUMER-INTERFACE`
