@@ -2583,3 +2583,67 @@ class TestLineageHandleRecoveryAudit:
         assert r["extra"]["recovery_key"] == f"{stem}:restart"
         assert r["extra"]["crash_recovery_key"] == c["extra"]["recovery_key"]
         assert "recovery:unknown-runtime" not in (r["runtime_id"],)
+
+    def test_recover_thread_creation_dispatched_no_handle_emits_sentinel_crash_and_real_restart(
+        self, tmp_path: Path
+    ) -> None:
+        """Oracle 9: crash between dispatched journal write and lineage persist.
+        A fresh recovery process creates the handle; crash carries the
+        sentinel, restart carries the real resumed runtime;
+        crash_recovery_key resolves."""
+        session = FakeRuntimeSession()
+        _, _, _, journal0, _ = _build_dialogue_stack(tmp_path, session=session)
+        journal0.write_phase(
+            OperationJournalEntry(
+                idempotency_key="sess-1:orphan-9",
+                operation="thread_creation",
+                phase="dispatched",
+                collaboration_id="orphan-9",
+                created_at="2026-05-17T00:00:00Z",
+                repo_root=str(tmp_path.resolve()),
+                codex_thread_id="thr-orphan",
+            ),
+            session_id="sess-1",
+        )
+
+        controller, _, store, journal, _ = _build_dialogue_stack(
+            tmp_path,
+            session=session,
+            runtime_prefix="rt1",
+        )
+        controller.recover_pending_operations()
+
+        crash, restart = self._crash_restart(journal)
+        assert len(crash) == 1 and len(restart) == 1
+        assert crash[0]["runtime_id"] == "recovery:unknown-runtime"
+        assert crash[0]["extra"]["recovery_subject"] == "lineage_handle"
+        assert crash[0]["extra"]["recovery_result"] == "handle_reattached"
+        assert restart[0]["runtime_id"] == "rt1-sess-1"
+        assert restart[0]["runtime_id"] != "recovery:unknown-runtime"
+        assert (
+            restart[0]["extra"]["crash_recovery_key"]
+            == crash[0]["extra"]["recovery_key"]
+        )
+        assert store.get("orphan-9") is not None
+
+    def test_recover_thread_creation_intent_is_noop(self, tmp_path: Path) -> None:
+        """Oracle 10: thread_creation:intent strictly precedes side effects —
+        pure no-op, no crash and no restart."""
+        controller, _, _, journal, _ = _build_dialogue_stack(tmp_path)
+        journal.write_phase(
+            OperationJournalEntry(
+                idempotency_key="sess-1:intent-only",
+                operation="thread_creation",
+                phase="intent",
+                collaboration_id="intent-only",
+                created_at="2026-05-17T00:00:00Z",
+                repo_root=str(tmp_path.resolve()),
+            ),
+            session_id="sess-1",
+        )
+
+        controller.recover_pending_operations()
+
+        crash, restart = self._crash_restart(journal)
+        assert crash == [] and restart == []
+        assert journal.list_unresolved(session_id="sess-1") == []
