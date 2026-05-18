@@ -223,6 +223,10 @@ with equivalent context binding.
       `~/.codex/sessions/` remain sandbox-blocked. Verify with a probe similar
       to the security probes in
       `docs/diagnostics/2026-04-28-delegate-execution-diagnostic.md`.
+      (Partial evidence: 2026-05-18 AC#2 block below — declarative boundary
+      proven runtime-observed; behavioral enforcement blocked by a
+      probe-independent live-`0.130.0` delegation-lane failure routed to
+      T-20260516-01. Box stays unchecked; AC#2 unsatisfied.)
 - [x] `test_runtime.py` regression assertion updated to expect the new
       `readableRoots` shape (including the dynamic gitdir resolution); full
       codex-collaboration test suite passes. (Evidence: 2026-05-18 block
@@ -320,6 +324,63 @@ Ticket disposition: **AC#3 satisfied. T-20260429-01 remains `open`.** AC#1
 inspection is not acceptable per
 `docs/diagnostics/2026-04-28-delegate-execution-diagnostic.md`) are
 unsatisfied. Do not close.
+
+### AC#2 verification evidence (2026-05-18) — partial; behavioral half blocked
+
+AC#2 requires a runtime-observed credential-boundary probe (static source
+inspection is explicitly not acceptable per
+`docs/diagnostics/2026-04-28-delegate-execution-diagnostic.md`). AC#2 has two
+halves; this session satisfied the declarative half only.
+
+1. **Declarative boundary — PROVEN (runtime-observed, not static inspection).**
+   A build-site runtime-proof instrumentation of
+   `build_workspace_write_sandbox_policy` (uncommitted; reverted at end of
+   session — no instrumentation in any commit on this branch) emitted the
+   exact policy the live runtime constructed for a real delegation:
+   - Job `2b5e8c9c-81d6-43b3-90b4-49653e998f31`, production worktree
+     `…/runtimes/delegation/2b5e8c9c…/worktree` (not a pytest temp path).
+   - `readOnlyAccess.readableRoots` = worktree + `~/.codex/memories` +
+     `~/.codex/plugins/cache` + `~/.agents/skills` + `~/.agents/plugins` +
+     resolved gitdir. `~/.codex/auth.json`, `~/.codex/config.toml`,
+     `~/.codex/history.jsonl`, and `~/.codex/sessions/` are **absent** from
+     `readableRoots` — the credential boundary holds as constructed.
+   - `networkAccess: False`, `excludeSlashTmp: True`,
+     `excludeTmpdirEnvVar: True`, `includePlatformDefaults: True`.
+   - Variant Isolation satisfied: patch applied `2026-05-18T16:51:08Z` <
+     instrumented MCP server start `2026-05-18T16:58:26Z` < policy build
+     `2026-05-18T17:10:17Z`. The captured policy is from the post-restart
+     instrumented runtime, observed under live Codex `0.130.0`.
+   - Raw capture preserved machine-locally at
+     `.tmp/ac2-policy-literal-2b5e8c9c.log` (gitignored, not durable record).
+
+2. **Behavioral enforcement — NOT OBSERVED (blocked, not refuted).** The
+   runtime-enforcement probe could not run. The credential-probe delegation
+   (`2b5e8c9c…`) and a subsequent no-op control delegation
+   (`7a5478c9-02c2-48f4-9210-2d291de38f59`, objective: write one file, no
+   out-of-worktree reads) both failed identically with
+   `worker_failed_before_capture`: the sandbox policy was built, then the
+   worker died **before the execution agent ran any command**
+   (`changed_files: []`; detail "Delegation outcome could not be confirmed
+   after recovery"). Because a no-op control with zero out-of-worktree access
+   reproduces the failure, it is **probe-independent** and carries no signal
+   about the credential boundary.
+
+Confound boundary: the declarative capture is **not** confounded — the policy
+is plugin-built and the literal is observed directly from the live runtime.
+The behavioral-half blocker **is** in the live-runtime version domain: a
+probe-independent worker-startup/crash-recovery failure observed under live
+`0.130.0`. The `0.117.0` `TESTED`/`MINIMUM` pin (owned by **T-20260516-01**,
+`docs/tickets/2026-05-16-codex-app-server-version-upgrade.md`) is the best
+existing owner lane and the likely confound; root-cause proof is **not** in
+hand and is deferred to the T-20260516-01 version rebaseline or a focused
+worker-startup RCA. AC#1 (comparable live smoke) and AC#2's behavioral half
+are both gated on a usable live delegation lane under the target Codex
+version.
+
+Ticket disposition: **AC#2 partially evidenced — declarative boundary proven
+(runtime-observed); behavioral enforcement blocked by a probe-independent
+live-`0.130.0` delegation-lane failure. AC#2 remains unsatisfied;
+T-20260429-01 stays `open`.** `2b14b03` (AC#3 evidence) untouched.
 
 ### Source locations
 
