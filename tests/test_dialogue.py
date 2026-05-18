@@ -28,8 +28,21 @@ def _build_dialogue_stack(
     *,
     session: FakeRuntimeSession | None = None,
     session_id: str = "sess-1",
+    runtime_prefix: str = "rt",
 ) -> tuple[DialogueController, ControlPlane, LineageStore, OperationJournal, TurnStore]:
-    """Wire up a full dialogue stack with test doubles."""
+    """Wire up a full dialogue stack with test doubles.
+
+    runtime_prefix controls the advisory runtime id minted by this stack's
+    ControlPlane. Default "rt" yields the exact pre-plan sequence —
+    "rt-{session_id}" then bare "uuid-{i}" — so every existing assertion and
+    every later-id consumer is preserved bit-for-bit. Build a SECOND stack over
+    the same tmp_path/session_id with a different runtime_prefix to model a
+    fresh post-crash process: the persisted lineage/journal/audit state is
+    shared, but a reattach mints a genuinely new runtime id (ControlPlane
+    caches runtime in-process, so the same stack cannot). collaboration_id
+    stays session-keyed (stable) — it is the lineage_handle dedup stem and
+    must not vary across recovery passes.
+    """
     session = session or FakeRuntimeSession()
     plugin_data = tmp_path / "plugin-data"
     journal = OperationJournal(plugin_data)
@@ -40,7 +53,15 @@ def _build_dialogue_stack(
         repo_identity_loader=_repo_identity,
         clock=lambda: 100.0,
         uuid_factory=iter(
-            (f"rt-{session_id}", *(f"uuid-{i}" for i in range(100)))
+            (
+                f"{runtime_prefix}-{session_id}",
+                *(
+                    f"uuid-{i}"
+                    if runtime_prefix == "rt"
+                    else f"{runtime_prefix}-uuid-{i}"
+                    for i in range(100)
+                ),
+            )
         ).__next__,
         journal=journal,
     )
