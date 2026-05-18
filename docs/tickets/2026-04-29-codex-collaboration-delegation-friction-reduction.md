@@ -223,9 +223,10 @@ with equivalent context binding.
       `~/.codex/sessions/` remain sandbox-blocked. Verify with a probe similar
       to the security probes in
       `docs/diagnostics/2026-04-28-delegate-execution-diagnostic.md`.
-- [ ] `test_runtime.py` regression assertion updated to expect the new
+- [x] `test_runtime.py` regression assertion updated to expect the new
       `readableRoots` shape (including the dynamic gitdir resolution); full
-      codex-collaboration test suite passes.
+      codex-collaboration test suite passes. (Evidence: 2026-05-18 block
+      below. Ticket stays open — AC#1 and AC#2 unsatisfied.)
 - [x] Friction surface 3 (file_change opacity) is documented as an upstream
       App Server schema limitation with a recorded future-enrichment path.
 
@@ -283,6 +284,42 @@ Classify escalation causes in the smoke record:
       post-edit pyright, focused pytest runs, git diff for artifact prep,
       Python tool-availability probes, etc.) — these would remain after
       Options B+E+F land
+
+### AC#3 verification evidence (2026-05-18)
+
+AC#3 has two halves; both are satisfied at clean HEAD `4668925`
+(`Merge pull request #13 from jpsweeney97/chore/debt-20260517-crash-restart-audit`),
+working tree clean.
+
+1. **Test-shape assertion (landed with Phase 1; verified present this
+   session, not authored here):**
+   - `tests/test_runtime.py::test_build_workspace_write_sandbox_policy_restricts_reads_and_writes`
+     asserts the exact post-Phase-1 policy dict, including `readableRoots`
+     = worktree + `~/.codex/memories` + `~/.codex/plugins/cache` +
+     `~/.agents/skills` + `~/.agents/plugins`, `includePlatformDefaults:
+     True`, `networkAccess: False`.
+   - Dynamic gitdir resolution is covered by
+     `test_policy_includes_gitdir_when_valid_git_pointer_present` plus the
+     exclusion cases (`_pointer_outside_git_worktrees`,
+     `_sibling_worktree_pointer`, `_no_git_pointer`) and the
+     `_resolve_worktree_gitdir` None paths.
+2. **Full suite passes:**
+   - `uv run pytest tests -q -m ""` → `1248 passed in 24.43s` (supersedes
+     the 2026-05-17 register figure of 1241; forward drift only).
+   - `uv run ruff check .` → `All checks passed!`
+
+Confound boundary: this gate is in-process — it builds the sandbox policy
+directly via `build_workspace_write_sandbox_policy` and invokes no live
+Codex App Server. It is therefore **not** confounded by the runtime
+Codex-version question (live `0.130.0` vs. pinned/tested `0.117.0`) that
+gates AC#1. AC#3 closure evidence is clean.
+
+Ticket disposition: **AC#3 satisfied. T-20260429-01 remains `open`.** AC#1
+(comparable live `/delegate` smoke, avoidable sandbox-friction escalations
+<=2) and AC#2 (runtime-observed credential-boundary probe — static source
+inspection is not acceptable per
+`docs/diagnostics/2026-04-28-delegate-execution-diagnostic.md`) are
+unsatisfied. Do not close.
 
 ### Source locations
 
