@@ -28,6 +28,7 @@ _AUDIT_TTL_DAYS = 30
 _AuditDedupKey = tuple[str, str, str | None]
 _DialogueOutcomeDedupKey = tuple[str, str, str]
 _DelegationOutcomeDedupKey = tuple[str, str]
+_RecoveryAuditDedupKey = tuple[str, str]
 
 
 @dataclass(frozen=True)
@@ -136,6 +137,22 @@ def _populate_from_audit_record(
     if turn_id is not None and not isinstance(turn_id, str):
         return
     audit_seen.add((action, collaboration_id, turn_id))
+
+
+def _populate_from_recovery_audit_record(
+    record: dict[str, Any],
+    recovery_seen: set[_RecoveryAuditDedupKey],
+) -> None:
+    action = record.get("action")
+    if action not in ("crash", "restart"):
+        return
+    extra = record.get("extra")
+    if not isinstance(extra, dict):
+        return
+    recovery_key = extra.get("recovery_key")
+    if not isinstance(recovery_key, str):
+        return
+    recovery_seen.add((action, recovery_key))
 
 
 def _populate_from_outcome_record(
@@ -307,9 +324,11 @@ class OperationJournal:
         self._analytics_dir.mkdir(parents=True, exist_ok=True)
         self._audit_seen_initialized = False
         self._outcomes_seen_initialized = False
+        self._recovery_audit_seen_initialized = False
         self._audit_seen: set[_AuditDedupKey] = set()
         self._dialogue_outcomes_seen: set[_DialogueOutcomeDedupKey] = set()
         self._delegation_outcomes_seen: set[_DelegationOutcomeDedupKey] = set()
+        self._recovery_audit_seen: set[_RecoveryAuditDedupKey] = set()
 
     @property
     def plugin_data_path(self) -> Path:
@@ -397,6 +416,31 @@ class OperationJournal:
             return
         self.append_audit_event(event)
         self._audit_seen.add(key)
+
+    def append_recovery_audit_event_once(
+        self, event: AuditEvent, *, recovery_key: str
+    ) -> bool:
+        """Append a recovery audit event unless (action, recovery_key) exists.
+
+        Dedupes against both in-memory state and persisted audit/events.jsonl.
+        Returns True when appended, False when a duplicate was suppressed.
+        Fails fast if event.extra['recovery_key'] disagrees with recovery_key.
+        """
+
+        event_recovery_key = event.extra.get("recovery_key")
+        if event_recovery_key != recovery_key:
+            raise ValueError(
+                "append_recovery_audit_event_once failed: "
+                "event.extra['recovery_key'] disagrees with recovery_key argument. "
+                f"Got: {event_recovery_key!r:.100}"
+            )
+        self._ensure_recovery_audit_seen_loaded()
+        key: _RecoveryAuditDedupKey = (event.action, recovery_key)
+        if key in self._recovery_audit_seen:
+            return False
+        self.append_audit_event(event)
+        self._recovery_audit_seen.add(key)
+        return True
 
     def append_outcome(self, record: OutcomeRecord) -> None:
         """Append an analytics outcome record as JSONL."""
@@ -529,6 +573,24 @@ class OperationJournal:
         self._audit_seen = new_audit_seen
         self._audit_seen_initialized = True
 
+    def _ensure_recovery_audit_seen_loaded(self) -> None:
+        if self._recovery_audit_seen_initialized:
+            return
+
+        new_recovery_audit_seen: set[_RecoveryAuditDedupKey] = set()
+        try:
+            self._populate_seen_from_file(
+                self._audit_path,
+                lambda record: _populate_from_recovery_audit_record(
+                    record, new_recovery_audit_seen
+                ),
+            )
+        except UnicodeDecodeError as exc:
+            self._quarantine_corrupt_jsonl(self._audit_path, reason=exc)
+            new_recovery_audit_seen = set()
+        self._recovery_audit_seen = new_recovery_audit_seen
+        self._recovery_audit_seen_initialized = True
+
     def _ensure_outcomes_seen_loaded(self) -> None:
         if self._outcomes_seen_initialized:
             return
@@ -558,8 +620,10 @@ class OperationJournal:
 
         self._audit_seen_initialized = False
         self._outcomes_seen_initialized = False
+        self._recovery_audit_seen_initialized = False
 
         new_audit_seen: set[_AuditDedupKey] = set()
+        new_recovery_audit_seen: set[_RecoveryAuditDedupKey] = set()
         new_dialogue_outcomes_seen: set[_DialogueOutcomeDedupKey] = set()
         new_delegation_outcomes_seen: set[_DelegationOutcomeDedupKey] = set()
         audit_quarantined_to: Path | None = None
@@ -569,9 +633,12 @@ class OperationJournal:
             audit_stats = self._prune_jsonl_pass(
                 path=self._audit_path,
                 cutoff=cutoff,
-                populate=lambda record: _populate_from_audit_record(
-                    record, new_audit_seen
-                ),
+                populate=lambda record: (
+                    _populate_from_audit_record(record, new_audit_seen),
+                    _populate_from_recovery_audit_record(
+                        record, new_recovery_audit_seen
+                    ),
+                )[0],
             )
         except UnicodeDecodeError as exc:
             audit_quarantined_to = self._quarantine_corrupt_jsonl(
@@ -580,8 +647,11 @@ class OperationJournal:
             )
             audit_stats = _PruneFileStats(0, 0, 0)
             new_audit_seen = set()
+            new_recovery_audit_seen = set()
         self._audit_seen = new_audit_seen
         self._audit_seen_initialized = True
+        self._recovery_audit_seen = new_recovery_audit_seen
+        self._recovery_audit_seen_initialized = True
 
         try:
             outcomes_stats = self._prune_jsonl_pass(
