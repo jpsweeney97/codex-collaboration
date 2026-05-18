@@ -65,12 +65,12 @@ Scope included here:
    boundary. QW4 remains a startup preflight stopgap, not ST3 closure.
 4. Continue the active 2026-05-17 debt-audit backlog rows in this order unless
    a narrower PR explicitly reorders with evidence:
-   `DEBT-20260517-HL2-CRASH-RESTART-AUDIT`,
-   `DEBT-20260517-QW3-HYGIENE`, and
+   `DEBT-20260517-QW3-HYGIENE` and
    `DEBT-20260517-HL4-DELEGATION-TEST-SEAMS`. Phase 1 closed
-   `DEBT-20260517-QW1-LOGGING` and `DEBT-20260517-QW2-DRAIN-WORKERS`; HL1
-   remains ticket-owned by `T-20260516-01` / `T-20260516-02`; HL3 remains
-   mapped to deferred `WL6-CONCURRENT-PROMOTION-LOCK`.
+   `DEBT-20260517-QW1-LOGGING` and `DEBT-20260517-QW2-DRAIN-WORKERS`; HL2
+   crash/restart audit emission closed with HL2 Task 2.2; HL1 remains
+   ticket-owned by `T-20260516-01` / `T-20260516-02`; HL3 remains mapped to
+   deferred `WL6-CONCURRENT-PROMOTION-LOCK`.
 5. Classify or intentionally safe-terminalize the currently unsupported App
    Server request kinds tracked by `T-20260429-02`.
 6. Sweep residual typing and minor Packet 1 carry-forward debt (`TT.1`,
@@ -94,7 +94,6 @@ project truth.
 
 | ID | State | Owning artifact | Current truth | Exit condition |
 |---|---|---|---|---|
-| `DEBT-20260517-HL2-CRASH-RESTART-AUDIT` | `open` | `docs/audits/2026-05-17-codex-collaboration-debt.md` HL2 plus `docs/specs/contracts.md` reserved actions | `crash` and `restart` remain reserved-but-unemitted audit actions. The implementation must use `AuditEvent(action=...)`, not a dict with `type`, and must first decide event locus, sentinel/schema shape, duplicate-prevention rules, and bootstrap-vs-controller lifecycle ordering around lazy `McpServer` recovery. | Record the mini-design decision, emit best-effort crash/restart records with contract-valid event shape, prevent duplicate restart records across idempotent/lazy recovery calls, test normal shutdown/no false crash and recovery ordering, and update specs/docs for any sentinel IDs or schema changes. |
 | `DEBT-20260517-QW3-HYGIENE` | `open` | `docs/audits/2026-05-17-codex-collaboration-debt.md` QW3 | The audit bundles small doc/config hygiene items: stale exact test counts, missing `delivery.md` component entries, vulnerability-scanner CI shape, `_CANCEL_CAPABLE_KINDS` duplication, plugin-data-path logging/doc note, version-surface alignment across `pyproject.toml`, `.claude-plugin/plugin.json`, and `server/runtime.py`, and `deque(maxlen=200)` truncation documentation. | Resolve, split, or deliberately decline each subitem individually. If the version-surface item is handled with `T-20260516-01`, record that handoff instead of claiming QW3 closure independently. |
 | `DEBT-20260517-HL4-DELEGATION-TEST-SEAMS` | `open` | `docs/audits/2026-05-17-codex-collaboration-debt.md` HL4 | Delegation tests still couple to private state, behavior injection, registry calls, and commit ordering. A snapshot-only seam is insufficient; observation and behavior/protocol seams must be handled separately. | Add supported observation and behavior/protocol seams, then migrate representative tests away from private monkeypatching/registry spies without counting a read-only snapshot alone as closure. |
 
@@ -102,6 +101,7 @@ project truth.
 
 | ID | State | Owning artifact | Closeout evidence | Residual owner |
 |---|---|---|---|---|
+| `DEBT-20260517-HL2-CRASH-RESTART-AUDIT` | `closed` | `docs/audits/2026-05-17-codex-collaboration-debt.md` HL2, `docs/specs/design-docs/2026-05-17-crash-restart-audit-events.md`, and `docs/superpowers/plans/2026-05-17-phase2-task-2.2-crash-restart-audit-emission.md` | HL2 Task 2.2 landed recovery audit emission for all three subjects: `lineage_handle` (crash+restart on genuine reattach, crash-only on quarantine, including `turn_dispatch` two-phase and between-turn cases), `orphaned_active_job` (crash only), and `operation_journal` (residual-proof `job_creation`/`approval_resolution:dispatched` plus recovery-mutation `promotion`, with no-op intent/guard paths emitting nothing). Persisted `(action, recovery_key)` dedup is journal-owned and keys `lineage_handle` on stable `collaboration_id`, preventing eager/lazy retry double-emission without an `McpServer` flag. Close gates: `uv run pytest tests -q -m ""` -> 1241 passed; `uv run ruff check .` passed; `git diff --check` passed. | None. |
 | `DEBT-20260515` | `closed` | `docs/audits/2026-05-15-codex-collaboration-debt.md` and `docs/superpowers/plans/2026-05-16-codex-collaboration-debt-repair.md` | PR #4 published the audit (`cd205e5`); PR #5 published the plan (`d9a76ed`); PRs #6-#9 landed the four execution phases (`32792af`, `b823386`, `a649b9d`, `b34a39b`). Main CI passed after every merge. Phase 4 close gates included `uv run pytest tests -q -m ""` -> 1199 passed, `uv run pytest tests/test_codex_wire_contract.py -q -rA` -> 6 passed with no skips, and `uv run ruff check .` passing. | Active residuals are `T-20260516-01` (ST2 upgrade) and `T-20260516-02` (ST3 contract-version decision). Intentional deferrals are `HL2-XDIST-PARALLELIZATION`, `HL4a-LINEAGE-CACHE`, `ST1-KNOWLEDGE-TRANSFER`, `WL1-MODELS-MEGAHUB`, `WL2-ANY-TYPED-CONTROLLERS`, `WL3-LAYERING-CI-ASSERT`, `WL4-UNBOUNDED-AUDIT-LOG`, `WL5-MODELS-HOLDS-SESSION`, and `WL6-CONCURRENT-PROMOTION-LOCK`. |
 | `DEBT-20260517-QW1-LOGGING` | `closed` | `docs/audits/2026-05-17-codex-collaboration-debt.md` QW1 and `docs/superpowers/plans/2026-05-17-codex-collaboration-debt-active-rows.md` Phase 1 | Phase 1 added bootstrap root logging configuration, `CODEX_COLLAB_LOG_LEVEL`, startup INFO logging for the resolved plugin data path, and README configuration documentation. Close gates: `uv run pytest tests/test_bootstrap.py tests/test_delegation_controller.py tests/test_delegate_start_integration.py tests/test_delegate_start_async_integration.py -q` -> 170 passed; `uv run pytest tests -q -m ""` -> 1204 passed; `uv run ruff check .` passed; `git diff --check` passed. | None. |
 | `DEBT-20260517-QW2-DRAIN-WORKERS` | `closed` | `docs/audits/2026-05-17-codex-collaboration-debt.md` QW2 and `docs/superpowers/plans/2026-05-17-codex-collaboration-debt-active-rows.md` Phase 1 | Phase 1 added controller-owned worker thread tracking plus `drain_workers()`, migrated delegation worker cleanup off process-wide thread enumeration, and drove re-escalation cleanup through protocol-level `decide()` before drain. Close gates: `uv run pytest tests/test_bootstrap.py tests/test_delegation_controller.py tests/test_delegate_start_integration.py tests/test_delegate_start_async_integration.py -q` -> 170 passed; `uv run pytest tests -q -m ""` -> 1204 passed; `uv run ruff check .` passed; `git diff --check` passed. | None. |

@@ -125,8 +125,8 @@ An audit event is emitted for every state transition that crosses a trust or cap
 | Server request timed out | `approval_timeout` | `job_id`, `request_id` |
 | Parked request aborted internally | `internal_abort` | `job_id`, `request_id` |
 | Operator decision dispatch failed | `dispatch_failed` | `job_id`, `request_id` |
-| Startup recovery detected dispatched residual state implying prior interruption | `crash` | `collaboration_id`, `runtime_id` (real, or the recovery sentinel per the invariant), `extra` recovery sub-contract — see [§Recovery-Inferred Crash/Restart Audit](#recovery-inferred-crashrestart-audit). Spec-normative ahead of source; emission lands with `DEBT-20260517-HL2-CRASH-RESTART-AUDIT` Task 2.2 |
-| A runtime was actually reattached/resumed for a subject during recovery | `restart` | `collaboration_id`, `runtime_id` (new resumed runtime), `extra` recovery sub-contract incl. `crash_recovery_key` — see [§Recovery-Inferred Crash/Restart Audit](#recovery-inferred-crashrestart-audit). Spec-normative ahead of source; emission lands with `DEBT-20260517-HL2-CRASH-RESTART-AUDIT` Task 2.2 |
+| Startup recovery detected dispatched residual state implying prior interruption | `crash` | `collaboration_id`, `runtime_id` (real, or the recovery sentinel per the invariant), `extra` recovery sub-contract — see [§Recovery-Inferred Crash/Restart Audit](#recovery-inferred-crashrestart-audit). |
+| A runtime was actually reattached/resumed for a subject during recovery | `restart` | `collaboration_id`, `runtime_id` (new resumed runtime), `extra` recovery sub-contract incl. `crash_recovery_key` — see [§Recovery-Inferred Crash/Restart Audit](#recovery-inferred-crashrestart-audit). |
 
 **Reserved (not currently emitted):**
 
