@@ -109,6 +109,13 @@ class DialogueController:
         self._turn_store = turn_store
         self._repo_identity_loader = repo_identity_loader or load_repo_identity
         self._uuid_factory = uuid_factory or (lambda: str(uuid.uuid4()))
+        # In-memory, same-pass only. Maps collaboration_id ->
+        # (operation, phase) for a turn_dispatch entry reconciled in phase-1
+        # so phase-2 reattach can populate the Conditional recovery_operation/
+        # recovery_phase keys. NOT durable: a second crash before the phase-2
+        # audit append legitimately degrades the event to the between-turn
+        # shape. Reset per recover_startup() pass.
+        self._recovery_turn_dispatch_meta: dict[str, tuple[str, str]] = {}
 
     def start(
         self,
@@ -520,6 +527,76 @@ class DialogueController:
             context_size=packet.context_size,
         )
 
+    def _emit_lineage_handle_recovery(
+        self,
+        *,
+        collaboration_id: str,
+        crash_runtime_id: str,
+        restart_runtime_id: str | None,
+        recovery_result: str,
+        recovery_operation: str | None,
+        recovery_phase: str | None,
+    ) -> None:
+        """Emit lineage_handle crash (+restart on reattach success)."""
+
+        stem = f"lineage_handle:{collaboration_id}"
+        crash_key = f"{stem}:crash"
+        crash_extra: dict[str, object] = {
+            "recovery_key": crash_key,
+            "recovery_subject": "lineage_handle",
+            "recovery_result": recovery_result,
+            "detected_during": "startup_recovery",
+        }
+        if recovery_operation is not None:
+            crash_extra["recovery_operation"] = recovery_operation
+        if recovery_phase is not None:
+            crash_extra["recovery_phase"] = recovery_phase
+        restart_key = f"{stem}:restart"
+        try:
+            self._journal.append_recovery_audit_event_once(
+                AuditEvent(
+                    event_id=self._uuid_factory(),
+                    timestamp=self._journal.timestamp(),
+                    actor="system",
+                    action="crash",
+                    collaboration_id=collaboration_id,
+                    runtime_id=crash_runtime_id,
+                    extra=crash_extra,
+                ),
+                recovery_key=crash_key,
+            )
+            if restart_runtime_id is None:
+                return
+            restart_extra: dict[str, object] = {
+                "recovery_key": restart_key,
+                "recovery_subject": "lineage_handle",
+                "recovery_result": recovery_result,
+                "detected_during": "startup_recovery",
+                "crash_recovery_key": crash_key,
+            }
+            if recovery_operation is not None:
+                restart_extra["recovery_operation"] = recovery_operation
+            if recovery_phase is not None:
+                restart_extra["recovery_phase"] = recovery_phase
+            self._journal.append_recovery_audit_event_once(
+                AuditEvent(
+                    event_id=self._uuid_factory(),
+                    timestamp=self._journal.timestamp(),
+                    actor="system",
+                    action="restart",
+                    collaboration_id=collaboration_id,
+                    runtime_id=restart_runtime_id,
+                    extra=restart_extra,
+                ),
+                recovery_key=restart_key,
+            )
+        except Exception as exc:
+            _log_recovery_failure(
+                "emit_lineage_handle_recovery",
+                exc,
+                collaboration_id,
+            )
+
     def recover_startup(self) -> None:
         """One-shot startup recovery coordinator.
 
@@ -665,6 +742,7 @@ class DialogueController:
             )
 
         existing = self._lineage_store.get(entry.collaboration_id)
+        pre_existing_runtime_id = existing.runtime_id if existing is not None else None
         resolved_root = Path(entry.repo_root)
         runtime = self._control_plane.get_advisory_runtime(resolved_root)
 
@@ -703,6 +781,14 @@ class DialogueController:
                 repo_root=entry.repo_root,
             ),
             session_id=self._session_id,
+        )
+        self._emit_lineage_handle_recovery(
+            collaboration_id=entry.collaboration_id,
+            crash_runtime_id=pre_existing_runtime_id or "recovery:unknown-runtime",
+            restart_runtime_id=runtime.runtime_id,
+            recovery_result="handle_reattached",
+            recovery_operation=entry.operation,
+            recovery_phase=entry.phase,
         )
         return entry.collaboration_id
 

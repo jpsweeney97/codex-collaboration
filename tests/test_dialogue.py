@@ -2504,3 +2504,82 @@ class TestRecoveryOutcomeEmission:
                     r for r in records if r["outcome_type"] == "dialogue_turn"
                 ]
                 assert len(dialogue_outcomes) == 0
+
+
+class TestLineageHandleRecoveryAudit:
+    def _crash_restart(self, journal) -> tuple[list[dict], list[dict]]:
+        audit_path = journal.plugin_data_path / "audit" / "events.jsonl"
+        if not audit_path.exists():
+            return [], []
+        events = [
+            json.loads(line)
+            for line in audit_path.read_text().strip().split("\n")
+            if line.strip()
+        ]
+        crash = [event for event in events if event["action"] == "crash"]
+        restart = [event for event in events if event["action"] == "restart"]
+        return crash, restart
+
+    def test_recover_thread_creation_dispatched_existing_handle_emits_crash_restart_pair(
+        self, tmp_path: Path
+    ) -> None:
+        """Oracle 2 + 1: pre-existing handle reattach co-emits crash
+        (pre-existing runtime) + restart (resumed, genuinely NEW runtime) on
+        the same stem; restart.extra['crash_recovery_key'] resolves to the
+        emitted crash. The recovery pass runs on a FRESH stack over the same
+        plugin-data (different runtime_prefix) so the resumed runtime is
+        provably distinct from the crash runtime — ControlPlane caches runtime
+        in-process, so a same-controller pass would assert "new runtime"
+        vacuously."""
+        session = FakeRuntimeSession()
+        c0, _, store0, journal0, _ = _build_dialogue_stack(tmp_path, session=session)
+        start = c0.start(tmp_path)
+        pre_runtime = store0.get(start.collaboration_id).runtime_id
+        journal0.write_phase(
+            OperationJournalEntry(
+                idempotency_key="sess-1:redispatch",
+                operation="thread_creation",
+                phase="dispatched",
+                collaboration_id=start.collaboration_id,
+                created_at="2026-05-17T00:00:00Z",
+                repo_root=str(tmp_path.resolve()),
+                codex_thread_id="thr-start",
+            ),
+            session_id="sess-1",
+        )
+
+        controller, _, _, journal, _ = _build_dialogue_stack(
+            tmp_path,
+            session=session,
+            runtime_prefix="rt1",
+        )
+        controller.recover_pending_operations()
+
+        crash, restart = self._crash_restart(journal)
+        assert len(crash) == 1 and len(restart) == 1
+        c, r = crash[0], restart[0]
+        assert c["actor"] == "system"
+        assert set(c).issuperset(
+            {
+                "event_id",
+                "timestamp",
+                "actor",
+                "action",
+                "collaboration_id",
+                "runtime_id",
+                "extra",
+            }
+        )
+        assert c["extra"]["recovery_subject"] == "lineage_handle"
+        assert c["extra"]["recovery_result"] == "handle_reattached"
+        assert c["extra"]["detected_during"] == "startup_recovery"
+        assert c["extra"]["recovery_operation"] == "thread_creation"
+        assert c["extra"]["recovery_phase"] == "dispatched"
+        assert c["runtime_id"] == pre_runtime == "rt-sess-1"
+        assert r["runtime_id"] == "rt1-sess-1"
+        assert r["runtime_id"] != c["runtime_id"]
+        stem = f"lineage_handle:{start.collaboration_id}"
+        assert c["extra"]["recovery_key"] == f"{stem}:crash"
+        assert r["extra"]["recovery_key"] == f"{stem}:restart"
+        assert r["extra"]["crash_recovery_key"] == c["extra"]["recovery_key"]
+        assert "recovery:unknown-runtime" not in (r["runtime_id"],)
