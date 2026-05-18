@@ -120,6 +120,32 @@ def _audit_event(
     )
 
 
+def _recovery_audit_event(
+    *,
+    event_id: str = "rec-evt-1",
+    action: str = "crash",
+    recovery_key: str = "lineage_handle:collab-1:crash",
+    recovery_subject: str = "lineage_handle",
+    recovery_result: str = "handle_quarantined_unknown",
+    collaboration_id: str = "collab-1",
+    runtime_id: str = "rt-1",
+) -> AuditEvent:
+    return AuditEvent(
+        event_id=event_id,
+        timestamp="2026-05-17T00:00:00Z",
+        actor="system",
+        action=action,
+        collaboration_id=collaboration_id,
+        runtime_id=runtime_id,
+        extra={
+            "recovery_key": recovery_key,
+            "recovery_subject": recovery_subject,
+            "recovery_result": recovery_result,
+            "detected_during": "startup_recovery",
+        },
+    )
+
+
 def _dialogue_outcome(
     *,
     outcome_id: str = "outcome-1",
@@ -674,6 +700,154 @@ def test_append_dialogue_audit_event_once_updates_seen_only_after_success(
 
     audit_path = tmp_path / "plugin-data" / "audit" / "events.jsonl"
     assert len(_read_jsonl(audit_path)) == 1
+
+
+def test_append_recovery_audit_event_once_appends_and_returns_true(
+    tmp_path: Path,
+) -> None:
+    journal = OperationJournal(tmp_path / "plugin-data")
+
+    appended = journal.append_recovery_audit_event_once(
+        _recovery_audit_event(),
+        recovery_key="lineage_handle:collab-1:crash",
+    )
+
+    assert appended is True
+    audit_path = tmp_path / "plugin-data" / "audit" / "events.jsonl"
+    records = _read_jsonl(audit_path)
+    assert [record["action"] for record in records] == ["crash"]
+    assert records[0]["extra"]["recovery_key"] == "lineage_handle:collab-1:crash"
+
+
+def test_append_recovery_audit_event_once_suppresses_duplicate(
+    tmp_path: Path,
+) -> None:
+    journal = OperationJournal(tmp_path / "plugin-data")
+    journal.append_recovery_audit_event_once(
+        _recovery_audit_event(event_id="first"),
+        recovery_key="lineage_handle:collab-1:crash",
+    )
+
+    suppressed = journal.append_recovery_audit_event_once(
+        _recovery_audit_event(event_id="second"),
+        recovery_key="lineage_handle:collab-1:crash",
+    )
+
+    assert suppressed is False
+    audit_path = tmp_path / "plugin-data" / "audit" / "events.jsonl"
+    records = _read_jsonl(audit_path)
+    assert [record["event_id"] for record in records] == ["first"]
+
+
+def test_append_recovery_audit_event_once_allows_distinct_keys(
+    tmp_path: Path,
+) -> None:
+    journal = OperationJournal(tmp_path / "plugin-data")
+
+    assert journal.append_recovery_audit_event_once(
+        _recovery_audit_event(
+            action="crash",
+            recovery_key="lineage_handle:c:crash",
+        ),
+        recovery_key="lineage_handle:c:crash",
+    )
+    assert journal.append_recovery_audit_event_once(
+        _recovery_audit_event(
+            action="restart",
+            recovery_key="lineage_handle:c:restart",
+            recovery_result="handle_reattached",
+        ),
+        recovery_key="lineage_handle:c:restart",
+    )
+
+    audit_path = tmp_path / "plugin-data" / "audit" / "events.jsonl"
+    assert {record["action"] for record in _read_jsonl(audit_path)} == {
+        "crash",
+        "restart",
+    }
+
+
+def test_append_recovery_audit_event_once_fails_fast_on_key_disagreement(
+    tmp_path: Path,
+) -> None:
+    journal = OperationJournal(tmp_path / "plugin-data")
+
+    with pytest.raises(ValueError, match="recovery_key"):
+        journal.append_recovery_audit_event_once(
+            _recovery_audit_event(recovery_key="lineage_handle:collab-1:crash"),
+            recovery_key="orphaned_active_job:job-9:crash",
+        )
+
+
+def test_append_recovery_audit_event_once_dedupes_against_persisted_file(
+    tmp_path: Path,
+) -> None:
+    plugin_data = tmp_path / "plugin-data"
+    first = OperationJournal(plugin_data)
+    first.append_recovery_audit_event_once(
+        _recovery_audit_event(event_id="persisted"),
+        recovery_key="lineage_handle:collab-1:crash",
+    )
+
+    second = OperationJournal(plugin_data)
+    appended = second.append_recovery_audit_event_once(
+        _recovery_audit_event(event_id="retry"),
+        recovery_key="lineage_handle:collab-1:crash",
+    )
+
+    assert appended is False
+    audit_path = plugin_data / "audit" / "events.jsonl"
+    assert [record["event_id"] for record in _read_jsonl(audit_path)] == ["persisted"]
+    assert second._recovery_audit_seen_initialized is True
+
+
+def test_append_recovery_audit_event_once_updates_seen_only_after_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    journal = OperationJournal(tmp_path / "plugin-data")
+    event = _recovery_audit_event()
+
+    def fail_append(event: AuditEvent) -> None:
+        raise OSError("append failed")
+
+    monkeypatch.setattr(journal, "append_audit_event", fail_append)
+    with pytest.raises(OSError, match="append failed"):
+        journal.append_recovery_audit_event_once(
+            event,
+            recovery_key="lineage_handle:collab-1:crash",
+        )
+
+    assert ("crash", "lineage_handle:collab-1:crash") not in journal._recovery_audit_seen
+
+    monkeypatch.undo()
+    assert journal.append_recovery_audit_event_once(
+        event,
+        recovery_key="lineage_handle:collab-1:crash",
+    )
+
+    audit_path = tmp_path / "plugin-data" / "audit" / "events.jsonl"
+    assert len(_read_jsonl(audit_path)) == 1
+
+
+def test_prune_audit_logs_rebuilds_recovery_seen_set(tmp_path: Path) -> None:
+    now = datetime(2026, 5, 17, tzinfo=UTC)
+    journal = OperationJournal(tmp_path / "plugin-data", clock=_fixed_clock(now))
+    journal.append_recovery_audit_event_once(
+        _recovery_audit_event(event_id="kept"),
+        recovery_key="lineage_handle:collab-1:crash",
+    )
+
+    journal.prune_audit_logs()
+
+    assert journal._recovery_audit_seen_initialized is True
+    assert ("crash", "lineage_handle:collab-1:crash") in journal._recovery_audit_seen
+    assert (
+        journal.append_recovery_audit_event_once(
+            _recovery_audit_event(event_id="dup"),
+            recovery_key="lineage_handle:collab-1:crash",
+        )
+        is False
+    )
 
 
 def test_unreadable_outcomes_does_not_block_audit_append_once(
