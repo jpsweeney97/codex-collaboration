@@ -1123,6 +1123,64 @@ def test_recover_startup_closes_intent_only_as_noop(tmp_path: Path) -> None:
     assert job_store.get("job-1") is None
 
 
+def test_recover_startup_job_creation_intent_is_noop(tmp_path: Path) -> None:
+    """Oracle 10: job_creation:intent strictly precedes side effects."""
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    controller, _, _, _, _, journal, _, _ = _build_controller(tmp_path)
+    _write_unresolved_intent(
+        journal,
+        "sess-1",
+        idempotency_key="sess-1:intent-only",
+        collaboration_id="collab-1",
+        job_id="job-1",
+        repo_root=repo_root,
+    )
+
+    controller.recover_startup()
+
+    plugin_data = tmp_path / "data"
+    assert _recovery_events(plugin_data, "crash") == []
+    assert _recovery_events(plugin_data, "restart") == []
+
+
+def test_recover_startup_operation_journal_dispatched_emits_crash_real_runtime(
+    tmp_path: Path,
+) -> None:
+    """Oracle 4: a reconciled job_creation:dispatched entry emits an
+    operation_journal crash carrying the recorded runtime_id."""
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    controller, _, _, _, _, journal, _, _ = _build_controller(tmp_path)
+    _write_unresolved_dispatched(
+        journal,
+        "sess-1",
+        idempotency_key="sess-1:disp-key",
+        collaboration_id="collab-1",
+        job_id="job-1",
+        runtime_id="rt-real",
+        thread_id="thr-1",
+        repo_root=repo_root,
+    )
+
+    controller.recover_startup()
+
+    plugin_data = tmp_path / "data"
+    crash = _recovery_events(plugin_data, "crash")
+    assert len(crash) == 1
+    assert _recovery_events(plugin_data, "restart") == []
+    event = crash[0]
+    assert event["runtime_id"] == "rt-real"
+    assert event["extra"]["recovery_subject"] == "operation_journal"
+    assert event["extra"]["recovery_result"] == "journal_reconciled"
+    assert event["extra"]["recovery_operation"] == "job_creation"
+    assert event["extra"]["recovery_phase"] == "dispatched"
+    assert (
+        event["extra"]["recovery_key"]
+        == "operation_journal:job_creation:sess-1:disp-key:crash"
+    )
+
+
 def test_recover_startup_marks_dispatched_handle_and_job_unknown(
     tmp_path: Path,
 ) -> None:
@@ -1317,6 +1375,146 @@ def test_recover_startup_marks_orphaned_running_jobs_unknown(
     recovered = job_store.get("job-orphan")
     assert recovered is not None
     assert recovered.status == "unknown"
+
+
+def test_recover_startup_orphaned_active_job_emits_crash_only(
+    tmp_path: Path,
+) -> None:
+    """Oracle 3: persisted running job emits orphaned_active_job crash only."""
+    _, _, _, job_store, _, _, _, _ = _build_controller(tmp_path)
+    job_store.create(
+        DelegationJob(
+            job_id="job-orphan",
+            runtime_id="rt-orphan",
+            collaboration_id="collab-orphan",
+            base_commit="head-abc",
+            worktree_path="/tmp/wk",
+            promotion_state=None,
+            status="running",
+        )
+    )
+
+    controller2, _, _, _, _, _, _, _ = _build_controller(
+        tmp_path,
+        session_id="sess-1",
+    )
+    controller2.recover_startup()
+
+    plugin_data = tmp_path / "data"
+    crash = _recovery_events(plugin_data, "crash")
+    assert len(crash) == 1
+    assert _recovery_events(plugin_data, "restart") == []
+    event = crash[0]
+    assert event["actor"] == "system"
+    assert event["runtime_id"] == "rt-orphan"
+    assert event["collaboration_id"] == "collab-orphan"
+    assert event["extra"]["recovery_subject"] == "orphaned_active_job"
+    assert event["extra"]["recovery_result"] == "job_marked_unknown"
+    assert event["extra"]["recovery_key"] == "orphaned_active_job:job-orphan:crash"
+    assert event["extra"]["detected_during"] == "startup_recovery"
+    assert "recovery_operation" not in event["extra"]
+    assert "recovery_phase" not in event["extra"]
+
+
+def test_recover_startup_orphaned_needs_escalation_job_emits_crash_only(
+    tmp_path: Path,
+) -> None:
+    """Oracle 3: orphan sweep covers needs_escalation too."""
+    _, _, _, job_store, _, _, _, _ = _build_controller(tmp_path)
+    job_store.create(
+        DelegationJob(
+            job_id="job-esc",
+            runtime_id="rt-esc",
+            collaboration_id="collab-esc",
+            base_commit="head-abc",
+            worktree_path="/tmp/wk",
+            promotion_state=None,
+            status="needs_escalation",
+        )
+    )
+
+    controller2, _, _, _, _, _, _, _ = _build_controller(
+        tmp_path,
+        session_id="sess-1",
+    )
+    controller2.recover_startup()
+
+    plugin_data = tmp_path / "data"
+    crash = _recovery_events(plugin_data, "crash")
+    assert len(crash) == 1
+    assert _recovery_events(plugin_data, "restart") == []
+    event = crash[0]
+    assert event["runtime_id"] == "rt-esc"
+    assert event["collaboration_id"] == "collab-esc"
+    assert event["extra"]["recovery_subject"] == "orphaned_active_job"
+    assert event["extra"]["recovery_result"] == "job_marked_unknown"
+    assert event["extra"]["recovery_key"] == "orphaned_active_job:job-esc:crash"
+
+
+def test_operation_journal_append_isolation_does_not_block_reconcile(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Constraint 7: operation_journal append failures must not block the
+    durable reconcile."""
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    controller, _, _, _, _, journal, _, _ = _build_controller(tmp_path)
+    _write_unresolved_dispatched(
+        journal,
+        "sess-1",
+        idempotency_key="sess-1:disp-key",
+        collaboration_id="collab-1",
+        job_id="job-1",
+        runtime_id="rt-real",
+        thread_id="thr-1",
+        repo_root=repo_root,
+    )
+
+    def _boom(event, *, recovery_key):
+        raise OSError("audit disk full")
+
+    monkeypatch.setattr(journal, "append_recovery_audit_event_once", _boom)
+
+    controller.recover_startup()
+
+    assert journal.list_unresolved(session_id="sess-1") == []
+    plugin_data = tmp_path / "data"
+    assert _recovery_events(plugin_data, "crash") == []
+
+
+def test_orphaned_active_job_append_isolation_does_not_reverse_unknown(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Constraint 7: orphaned_active_job append failures must not reverse the
+    durable unknown transition."""
+    _, _, _, job_store, _, _, _, _ = _build_controller(tmp_path)
+    job_store.create(
+        DelegationJob(
+            job_id="job-orphan",
+            runtime_id="rt-orphan",
+            collaboration_id="collab-orphan",
+            base_commit="head-abc",
+            worktree_path="/tmp/wk",
+            promotion_state=None,
+            status="running",
+        )
+    )
+
+    controller2, _, _, store2, _, journal2, _, _ = _build_controller(
+        tmp_path,
+        session_id="sess-1",
+    )
+
+    def _boom(event, *, recovery_key):
+        raise OSError("audit disk full")
+
+    monkeypatch.setattr(journal2, "append_recovery_audit_event_once", _boom)
+
+    controller2.recover_startup()
+
+    assert store2.get("job-orphan").status == "unknown"
+    plugin_data = tmp_path / "data"
+    assert _recovery_events(plugin_data, "crash") == []
 
 
 def test_recover_startup_idempotent_second_call_is_noop(tmp_path: Path) -> None:
@@ -2440,6 +2638,44 @@ def test_recover_startup_marks_intent_only_approval_resolution_unknown(
     handle = lineage_store.get("collab-1")
     assert handle is not None and handle.status == "unknown"
     assert journal.list_unresolved(session_id="sess-1") == []
+    plugin_data = tmp_path / "data"
+    assert [
+        event
+        for event in _recovery_events(plugin_data, "crash")
+        if event.get("extra", {}).get("recovery_operation") == "approval_resolution"
+    ] == []
+    assert _recovery_events(plugin_data, "restart") == []
+
+
+def test_recover_startup_approval_resolution_intent_is_noop_for_audit(
+    tmp_path: Path,
+) -> None:
+    """Oracle 10: approval_resolution:intent is a pure no-op for recovery
+    audit purposes in an isolated fixture."""
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    controller, _, _, _, _, journal, _, _ = _build_controller(tmp_path)
+    journal.write_phase(
+        OperationJournalEntry(
+            idempotency_key="approval_resolution:job-iso:42",
+            operation="approval_resolution",
+            phase="intent",
+            collaboration_id="collab-iso",
+            created_at=journal.timestamp(),
+            repo_root=str(repo_root),
+            job_id="job-iso",
+            request_id="42",
+            decision="approve",
+        ),
+        session_id="sess-1",
+    )
+
+    controller.recover_startup()
+
+    plugin_data = tmp_path / "data"
+    assert journal.list_unresolved(session_id="sess-1") == []
+    assert _recovery_events(plugin_data, "crash") == []
+    assert _recovery_events(plugin_data, "restart") == []
 
 
 def test_recover_startup_closes_orphaned_none_decision_intent(
@@ -2586,6 +2822,26 @@ def test_recover_startup_marks_dispatched_approval_resolution_unknown(
     handle = lineage_store.get("collab-1")
     assert handle is not None and handle.status == "unknown"
     assert journal.list_unresolved(session_id="sess-1") == []
+    plugin_data = tmp_path / "data"
+    crash = [
+        event
+        for event in _recovery_events(plugin_data, "crash")
+        if event.get("extra", {}).get("recovery_subject") == "operation_journal"
+        and event.get("extra", {}).get("recovery_operation")
+        == "approval_resolution"
+    ]
+    assert len(crash) == 1
+    assert _recovery_events(plugin_data, "restart") == []
+    event = crash[0]
+    assert event["runtime_id"] == "rt-1"
+    assert event["extra"]["recovery_subject"] == "operation_journal"
+    assert event["extra"]["recovery_result"] == "journal_reconciled"
+    assert event["extra"]["recovery_operation"] == "approval_resolution"
+    assert event["extra"]["recovery_phase"] == "dispatched"
+    assert (
+        event["extra"]["recovery_key"]
+        == "operation_journal:approval_resolution:approval_resolution:job-1:42:crash"
+    )
 
 
 def test_decide_rejects_stale_request_id_after_reescalation(tmp_path: Path) -> None:
@@ -3085,6 +3341,23 @@ def _rollback_audit_events(plugin_data: Path) -> list[dict[str, Any]]:
         if payload.get("action") == "rollback":
             events.append(payload)
     return events
+
+
+def _recovery_events(plugin_data: Path, action: str) -> list[dict[str, Any]]:
+    audit_path = plugin_data / "audit" / "events.jsonl"
+    if not audit_path.exists():
+        return []
+    out: list[dict[str, Any]] = []
+    for line in audit_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if payload.get("action") == action:
+            out.append(payload)
+    return out
 
 
 def test_promote_rejects_dirty_primary_workspace(tmp_path: Path) -> None:
@@ -3692,6 +3965,15 @@ def test_recover_startup_backfills_missing_rollback_audit_event_for_rolled_back_
 
     rollback_events = _rollback_audit_events(plugin_data)
     assert len(rollback_events) == 1
+    crash = _recovery_events(plugin_data, "crash")
+    assert len(crash) == 1
+    assert _recovery_events(plugin_data, "restart") == []
+    event = crash[0]
+    assert event["runtime_id"] == "recovery:unknown-runtime"
+    assert event["extra"]["recovery_subject"] == "operation_journal"
+    assert event["extra"]["recovery_result"] == "journal_reconciled"
+    assert event["extra"]["recovery_operation"] == "promotion"
+    assert event["extra"]["recovery_phase"] == "dispatched"
     assert rollback_events[0]["job_id"] == job_id
     unresolved = [
         entry
@@ -3898,6 +4180,246 @@ def test_recover_startup_normalizes_promotion_intent_to_pending(
     assert recovered.promotion_state == "pending"
 
 
+def test_recover_startup_operation_journal_dispatched_no_runtime_emits_sentinel(
+    tmp_path: Path,
+) -> None:
+    """Oracle 4 sentinel case: promotion entries record no runtime_id."""
+    controller, job_store, journal, primary_repo, job_id, _hash, _cb = (
+        _build_promote_scenario(tmp_path)
+    )
+    session_id = "sess-promote"
+    idempotency_key = f"promotion:{job_id}:1"
+    created_at = journal.timestamp()
+    journal.write_phase(
+        OperationJournalEntry(
+            idempotency_key=idempotency_key,
+            operation="promotion",
+            phase="intent",
+            collaboration_id="collab-promote-1",
+            created_at=created_at,
+            repo_root=str(primary_repo),
+            job_id=job_id,
+        ),
+        session_id=session_id,
+    )
+    journal.write_phase(
+        OperationJournalEntry(
+            idempotency_key=idempotency_key,
+            operation="promotion",
+            phase="dispatched",
+            collaboration_id="collab-promote-1",
+            created_at=created_at,
+            repo_root=str(primary_repo),
+            job_id=job_id,
+        ),
+        session_id=session_id,
+    )
+    persisted = job_store.get(job_id)
+    assert persisted is not None
+    subprocess.run(
+        ["git", "-C", str(primary_repo), "apply", "--binary", persisted.artifact_paths[0]],
+        check=True,
+        capture_output=True,
+    )
+
+    controller.recover_startup()
+
+    plugin_data = tmp_path / "data"
+    crash = _recovery_events(plugin_data, "crash")
+    assert len(crash) == 1
+    event = crash[0]
+    assert event["action"] == "crash"
+    assert event["runtime_id"] == "recovery:unknown-runtime"
+    assert event["extra"]["recovery_subject"] == "operation_journal"
+    assert event["extra"]["detected_during"] == "startup_recovery"
+    assert event["extra"]["recovery_operation"] == "promotion"
+    assert _recovery_events(plugin_data, "restart") == []
+
+
+def test_recover_startup_operation_journal_promotion_intent_emits_crash(
+    tmp_path: Path,
+) -> None:
+    """Promotion:intent durable normalize-to-pending is crashworthy."""
+    controller, job_store, journal, primary_repo, job_id, _hash, _cb = (
+        _build_promote_scenario(tmp_path)
+    )
+    session_id = "sess-promote"
+    idempotency_key = f"promotion:{job_id}:1"
+    job_store.update_promotion_state(job_id, promotion_state="prechecks_passed")
+    journal.write_phase(
+        OperationJournalEntry(
+            idempotency_key=idempotency_key,
+            operation="promotion",
+            phase="intent",
+            collaboration_id="collab-promote-1",
+            created_at=journal.timestamp(),
+            repo_root=str(primary_repo),
+            job_id=job_id,
+        ),
+        session_id=session_id,
+    )
+
+    controller.recover_startup()
+
+    plugin_data = tmp_path / "data"
+    crash = _recovery_events(plugin_data, "crash")
+    assert len(crash) == 1
+    event = crash[0]
+    assert event["action"] == "crash"
+    assert event["runtime_id"] == "recovery:unknown-runtime"
+    assert event["extra"]["recovery_subject"] == "operation_journal"
+    assert event["extra"]["recovery_result"] == "journal_reconciled"
+    assert event["extra"]["recovery_operation"] == "promotion"
+    assert event["extra"]["recovery_phase"] == "intent"
+    assert event["extra"]["detected_during"] == "startup_recovery"
+    assert _recovery_events(plugin_data, "restart") == []
+    assert job_store.get(job_id).promotion_state == "pending"
+
+
+def test_recover_startup_promotion_intent_already_terminal_job_no_crash(
+    tmp_path: Path,
+) -> None:
+    controller, job_store, journal, primary_repo, job_id, _hash, _cb = (
+        _build_promote_scenario(tmp_path)
+    )
+    session_id = "sess-promote"
+    job_store.update_promotion_state(job_id, promotion_state="verified")
+    journal.write_phase(
+        OperationJournalEntry(
+            idempotency_key=f"promotion:{job_id}:1",
+            operation="promotion",
+            phase="intent",
+            collaboration_id="collab-promote-1",
+            created_at=journal.timestamp(),
+            repo_root=str(primary_repo),
+            job_id=job_id,
+        ),
+        session_id=session_id,
+    )
+
+    controller.recover_startup()
+
+    plugin_data = tmp_path / "data"
+    assert _recovery_events(plugin_data, "crash") == []
+    assert _recovery_events(plugin_data, "restart") == []
+    assert job_store.get(job_id).promotion_state == "verified"
+
+
+def test_recover_startup_promotion_intent_missing_job_no_crash(
+    tmp_path: Path,
+) -> None:
+    controller, job_store, journal, primary_repo, job_id, _hash, _cb = (
+        _build_promote_scenario(tmp_path)
+    )
+    session_id = "sess-promote"
+    absent = f"{job_id}-absent"
+    journal.write_phase(
+        OperationJournalEntry(
+            idempotency_key=f"promotion:{absent}:1",
+            operation="promotion",
+            phase="intent",
+            collaboration_id="collab-promote-1",
+            created_at=journal.timestamp(),
+            repo_root=str(primary_repo),
+            job_id=absent,
+        ),
+        session_id=session_id,
+    )
+
+    controller.recover_startup()
+
+    plugin_data = tmp_path / "data"
+    assert _recovery_events(plugin_data, "crash") == []
+    assert _recovery_events(plugin_data, "restart") == []
+
+
+def test_recover_startup_promotion_intent_job_id_none_no_crash(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controller, job_store, journal, primary_repo, job_id, _hash, _cb = (
+        _build_promote_scenario(tmp_path)
+    )
+    injected = OperationJournalEntry(
+        idempotency_key="promotion:none:1",
+        operation="promotion",
+        phase="intent",
+        collaboration_id="collab-promote-1",
+        created_at=journal.timestamp(),
+        repo_root=str(primary_repo),
+        job_id=None,
+    )
+    real_list_unresolved = journal.list_unresolved
+    monkeypatch.setattr(
+        journal,
+        "list_unresolved",
+        lambda *a, **k: [*real_list_unresolved(*a, **k), injected],
+    )
+
+    controller.recover_startup()
+
+    plugin_data = tmp_path / "data"
+    assert _recovery_events(plugin_data, "crash") == []
+    assert _recovery_events(plugin_data, "restart") == []
+
+
+def test_recover_startup_promotion_dispatched_missing_job_no_crash(
+    tmp_path: Path,
+) -> None:
+    controller, job_store, journal, primary_repo, job_id, _hash, _cb = (
+        _build_promote_scenario(tmp_path)
+    )
+    session_id = "sess-promote"
+    absent = f"{job_id}-absent"
+    journal.write_phase(
+        OperationJournalEntry(
+            idempotency_key=f"promotion:{absent}:1",
+            operation="promotion",
+            phase="dispatched",
+            collaboration_id="collab-promote-1",
+            created_at=journal.timestamp(),
+            repo_root=str(primary_repo),
+            job_id=absent,
+        ),
+        session_id=session_id,
+    )
+
+    controller.recover_startup()
+
+    plugin_data = tmp_path / "data"
+    assert _recovery_events(plugin_data, "crash") == []
+    assert _recovery_events(plugin_data, "restart") == []
+
+
+def test_recover_startup_promotion_dispatched_already_terminal_job_no_crash(
+    tmp_path: Path,
+) -> None:
+    controller, job_store, journal, primary_repo, job_id, _hash, _cb = (
+        _build_promote_scenario(tmp_path)
+    )
+    session_id = "sess-promote"
+    job_store.update_promotion_state(job_id, promotion_state="verified")
+    journal.write_phase(
+        OperationJournalEntry(
+            idempotency_key=f"promotion:{job_id}:1",
+            operation="promotion",
+            phase="dispatched",
+            collaboration_id="collab-promote-1",
+            created_at=journal.timestamp(),
+            repo_root=str(primary_repo),
+            job_id=job_id,
+        ),
+        session_id=session_id,
+    )
+
+    controller.recover_startup()
+
+    plugin_data = tmp_path / "data"
+    assert _recovery_events(plugin_data, "crash") == []
+    assert _recovery_events(plugin_data, "restart") == []
+    assert job_store.get(job_id).promotion_state == "verified"
+
+
 def test_promote_writes_dispatched_before_apply(tmp_path: Path) -> None:
     """The journal 'dispatched' phase must be written BEFORE git apply.
 
@@ -4036,6 +4558,9 @@ def test_recover_startup_leaves_unresolved_when_rollback_fails(
         "Failed rollback must not claim success."
     )
     assert _rollback_audit_events(tmp_path / "data") == []
+    plugin_data = tmp_path / "data"
+    assert _recovery_events(plugin_data, "crash") == []
+    assert _recovery_events(plugin_data, "restart") == []
 
 
 def test_recover_startup_suspends_rollback_when_user_edits_tracked_file(
@@ -4144,6 +4669,9 @@ def test_recover_startup_suspends_rollback_when_user_edits_tracked_file(
         "Journal must remain unresolved while job is at rollback_needed "
         "(spec: promotion:completed is reserved for terminal promotion states)"
     )
+    plugin_data = tmp_path / "data"
+    assert _recovery_events(plugin_data, "crash") == []
+    assert _recovery_events(plugin_data, "restart") == []
 
 
 def test_bootstrap_factory_wires_promotion_callback(tmp_path: Path) -> None:

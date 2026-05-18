@@ -2991,6 +2991,67 @@ class DelegationController:
             f"Got: decision={decision!r}, kind={kind!r}"
         )
 
+    def _emit_operation_journal_crash(self, entry: OperationJournalEntry) -> None:
+        """Emit an operation_journal crash for a non-no-op reconcile."""
+
+        stem = f"operation_journal:{entry.operation}:{entry.idempotency_key}"
+        recovery_key = f"{stem}:crash"
+        try:
+            self._journal.append_recovery_audit_event_once(
+                AuditEvent(
+                    event_id=self._uuid_factory(),
+                    timestamp=self._journal.timestamp(),
+                    actor="system",
+                    action="crash",
+                    collaboration_id=entry.collaboration_id,
+                    runtime_id=entry.runtime_id or "recovery:unknown-runtime",
+                    job_id=entry.job_id,
+                    extra={
+                        "recovery_key": recovery_key,
+                        "recovery_subject": "operation_journal",
+                        "recovery_result": "journal_reconciled",
+                        "recovery_operation": entry.operation,
+                        "recovery_phase": entry.phase,
+                        "detected_during": "startup_recovery",
+                    },
+                ),
+                recovery_key=recovery_key,
+            )
+        except Exception:
+            logger.warning(
+                "audit recovery crash (operation_journal) append failed",
+                exc_info=True,
+            )
+
+    def _emit_orphaned_active_job_crash(self, job: DelegationJob) -> None:
+        """Emit an orphaned_active_job crash after persisting unknown state."""
+
+        recovery_key = f"orphaned_active_job:{job.job_id}:crash"
+        try:
+            self._journal.append_recovery_audit_event_once(
+                AuditEvent(
+                    event_id=self._uuid_factory(),
+                    timestamp=self._journal.timestamp(),
+                    actor="system",
+                    action="crash",
+                    collaboration_id=job.collaboration_id,
+                    runtime_id=job.runtime_id,
+                    job_id=job.job_id,
+                    extra={
+                        "recovery_key": recovery_key,
+                        "recovery_subject": "orphaned_active_job",
+                        "recovery_result": "job_marked_unknown",
+                        "detected_during": "startup_recovery",
+                    },
+                ),
+                recovery_key=recovery_key,
+            )
+        except Exception:
+            logger.warning(
+                "audit recovery crash (orphaned_active_job) append failed",
+                exc_info=True,
+            )
+
     def recover_startup(self) -> None:
         """Consume unresolved job_creation journal records into durable terminal state.
 
@@ -3057,6 +3118,8 @@ class DelegationController:
                 ),
                 session_id=self._session_id,
             )
+            if entry.phase == "dispatched":
+                self._emit_operation_journal_crash(entry)
 
         # --- approval_resolution reconciliation ---
         # Close unresolved approval_resolution journal entries left by
@@ -3088,6 +3151,8 @@ class DelegationController:
                 ),
                 session_id=self._session_id,
             )
+            if entry.phase == "dispatched":
+                self._emit_operation_journal_crash(entry)
 
         # --- promotion reconciliation ---
         # Close unresolved promotion journal entries left by crashes during
@@ -3102,6 +3167,7 @@ class DelegationController:
                 by_key_pr[entry.idempotency_key] = entry
 
         for entry in by_key_pr.values():
+            promotion_reconciled = False
             if entry.phase == "intent":
                 # No mutation happened — normalize the job back to pending
                 # and close the journal entry. Preserve the attempt counter
@@ -3131,6 +3197,7 @@ class DelegationController:
                                 else {}
                             ),
                         )
+                        promotion_reconciled = True
             elif entry.phase == "dispatched":
                 # Mutation may have happened — re-verify in the primary workspace.
                 if entry.job_id is not None:
@@ -3141,6 +3208,7 @@ class DelegationController:
                                 job=job,
                                 job_id=entry.job_id,
                             )
+                            promotion_reconciled = True
                     elif job is not None and job.promotion_state not in (
                         "verified",
                         "discarded",
@@ -3206,6 +3274,7 @@ class DelegationController:
                                     entry.job_id,
                                     promotion_state="verified",
                                 )
+                                promotion_reconciled = True
                             else:
                                 # Mutation happened but verification failed — rollback.
                                 new_paths = {
@@ -3253,6 +3322,7 @@ class DelegationController:
                                     job=job,
                                     job_id=entry.job_id,
                                 )
+                                promotion_reconciled = True
 
             # Advance journal to completed.
             self._journal.write_phase(
@@ -3267,6 +3337,8 @@ class DelegationController:
                 ),
                 session_id=self._session_id,
             )
+            if promotion_reconciled:
+                self._emit_operation_journal_crash(entry)
 
         # --- Orphaned active-job reconciliation ---
         # After a cold restart, the runtime registry is fresh: no live
@@ -3288,6 +3360,7 @@ class DelegationController:
                         job.collaboration_id,
                         "unknown",
                     )
+                self._emit_orphaned_active_job_crash(job)
 
         # --- Terminal outcome catch-up (same-session only) ---
         # Sweep all same-session jobs for terminal statuses missing their
