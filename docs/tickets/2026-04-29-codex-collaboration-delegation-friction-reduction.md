@@ -350,8 +350,24 @@ halves; this session satisfied the declarative half only.
      instrumented MCP server start `2026-05-18T16:58:26Z` < policy build
      `2026-05-18T17:10:17Z`. The captured policy is from the post-restart
      instrumented runtime, observed under live Codex `0.130.0`.
-   - Raw capture preserved machine-locally at
-     `.tmp/ac2-policy-literal-2b5e8c9c.log` (gitignored, not durable record).
+   - Observed `sandboxPolicy` payload literal recorded durably below (the
+     diagnostic standard requires the literal, not a paraphrase). The raw
+     single-line capture is also retained machine-locally at
+     `.tmp/ac2-policy-literal-2b5e8c9c.log` (gitignored working backup; the
+     block below is the durable copy).
+
+Observed payload literal — verbatim from the instrumentation emit, timestamp
+`2026-05-18T17:10:17.265178+00:00` (absolute paths are the ephemeral
+delegation worktree and the operator home; the load-bearing facts are
+`readableRoots` membership and the network/tmp flags):
+
+```text
+[AC2-credential-boundary] worktree=/Users/jp/.claude/plugins/data/codex-collaboration-inline/runtimes/delegation/2b5e8c9c-81d6-43b3-90b4-49653e998f31/worktree sandboxPolicy={'type': 'workspaceWrite', 'writableRoots': ['/Users/jp/.claude/plugins/data/codex-collaboration-inline/runtimes/delegation/2b5e8c9c-81d6-43b3-90b4-49653e998f31/worktree'], 'readOnlyAccess': {'type': 'restricted', 'readableRoots': ['/Users/jp/.claude/plugins/data/codex-collaboration-inline/runtimes/delegation/2b5e8c9c-81d6-43b3-90b4-49653e998f31/worktree', '/Users/jp/.codex/memories', '/Users/jp/.codex/plugins/cache', '/Users/jp/.agents/skills', '/Users/jp/.agents/plugins', '/Users/jp/Projects/active/codex-collaboration/.git/worktrees/worktree'], 'includePlatformDefaults': True}, 'networkAccess': False, 'excludeSlashTmp': True, 'excludeTmpdirEnvVar': True}
+```
+
+Credential paths `~/.codex/auth.json`, `~/.codex/config.toml`,
+`~/.codex/history.jsonl`, `~/.codex/sessions/` do not appear anywhere in the
+literal above — the boundary holds as constructed by the live runtime.
 
 2. **Behavioral enforcement — NOT OBSERVED (blocked, not refuted).** The
    runtime-enforcement probe could not run. The credential-probe delegation
@@ -384,11 +400,15 @@ T-20260429-01 stays `open`.** `2b14b03` (AC#3 evidence) untouched.
 
 ### Source locations
 
-| Surface | File | Line |
+Anchors are symbol names, not line numbers — line numbers drift (the prior
+`23-58` / `1809-1812` entries had rotted ~50 and ~35 lines respectively;
+corrected 2026-05-18).
+
+| Surface | File | Anchor (symbol) |
 |---|---|---|
-| Sandbox policy builder | `server/runtime.py` | 23-58 |
-| Sandbox policy regression test | `tests/test_runtime.py` | 178 |
-| App Server response handler (file_change) | `server/approval_router.py` | 58-60 |
-| Escalation projection (file_change) | `server/delegation_controller.py` | 1809-1812 |
-| Vendored App Server schemas | `tests/fixtures/codex-app-server/0.117.0/` | (file_change shape) |
+| Sandbox policy builder | `server/runtime.py` | `def build_workspace_write_sandbox_policy` |
+| Sandbox policy regression test | `tests/test_runtime.py` | `test_build_workspace_write_sandbox_policy_restricts_reads_and_writes` (+ the `test_policy_*_gitdir_*` cases) |
+| App Server response handler (file_change) | `server/approval_router.py` | `requested_scope` assembly in the approval router |
+| Escalation projection (file_change) | `server/delegation_controller.py` | the `-> PendingEscalationView` projection (`requested_scope=request.requested_scope`) |
+| Vendored App Server schemas | `tests/fixtures/codex-app-server/0.117.0/` | (file_change request shape) |
 | Diagnostic record (Candidate A) | `docs/diagnostics/2026-04-28-delegate-execution-diagnostic.md` | (security probe pattern reusable here) |
