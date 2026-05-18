@@ -624,6 +624,9 @@ class DialogueController:
         This method does not validate session_id — an empty store is valid for
         a new session.
         """
+        # Same-pass staging is per recover_startup() invocation.
+        self._recovery_turn_dispatch_meta = {}
+
         # Phase 1: reconcile unresolved journal entries
         recovered_cids = set(self.recover_pending_operations())
 
@@ -670,6 +673,17 @@ class DialogueController:
                     self._lineage_store.update_status(
                         handle.collaboration_id, "unknown"
                     )
+                    staged = self._recovery_turn_dispatch_meta.get(
+                        handle.collaboration_id
+                    )
+                    self._emit_lineage_handle_recovery(
+                        collaboration_id=handle.collaboration_id,
+                        crash_runtime_id=handle.runtime_id,
+                        restart_runtime_id=None,
+                        recovery_result="handle_quarantined_unknown",
+                        recovery_operation=staged[0] if staged else None,
+                        recovery_phase=staged[1] if staged else None,
+                    )
                     continue
 
                 resumed_thread_id = runtime.session.resume_thread(
@@ -682,6 +696,17 @@ class DialogueController:
                 )
                 if handle.status == "unknown":
                     self._lineage_store.update_status(handle.collaboration_id, "active")
+                staged = self._recovery_turn_dispatch_meta.get(
+                    handle.collaboration_id
+                )
+                self._emit_lineage_handle_recovery(
+                    collaboration_id=handle.collaboration_id,
+                    crash_runtime_id=handle.runtime_id,
+                    restart_runtime_id=runtime.runtime_id,
+                    recovery_result="handle_reattached",
+                    recovery_operation=staged[0] if staged else None,
+                    recovery_phase=staged[1] if staged else None,
+                )
             except Exception as exc:
                 _log_recovery_failure(
                     "recover_startup",
@@ -689,6 +714,17 @@ class DialogueController:
                     handle.collaboration_id,
                 )
                 self._lineage_store.update_status(handle.collaboration_id, "unknown")
+                staged = self._recovery_turn_dispatch_meta.get(
+                    handle.collaboration_id
+                )
+                self._emit_lineage_handle_recovery(
+                    collaboration_id=handle.collaboration_id,
+                    crash_runtime_id=handle.runtime_id,
+                    restart_runtime_id=None,
+                    recovery_result="handle_quarantined_unknown",
+                    recovery_operation=staged[0] if staged else None,
+                    recovery_phase=staged[1] if staged else None,
+                )
 
     def recover_pending_operations(self) -> list[str]:
         """Scan journal for incomplete operations and resolve them deterministically.
@@ -816,6 +852,11 @@ class DialogueController:
                 f"Recovery integrity failure: no codex_thread_id in turn_dispatch entry. "
                 f"Got: idempotency_key={entry.idempotency_key!r:.100}"
             )
+
+        self._recovery_turn_dispatch_meta[entry.collaboration_id] = (
+            entry.operation,
+            entry.phase,
+        )
 
         try:
             runtime = self._control_plane.get_advisory_runtime(Path(entry.repo_root))

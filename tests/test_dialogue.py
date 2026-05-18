@@ -2647,3 +2647,406 @@ class TestLineageHandleRecoveryAudit:
         crash, restart = self._crash_restart(journal)
         assert crash == [] and restart == []
         assert journal.list_unresolved(session_id="sess-1") == []
+
+    def test_recover_turn_dispatch_two_phase_reattach_emits_crash_restart(
+        self, tmp_path: Path
+    ) -> None:
+        """Oracle 11: turn_dispatch is a two-phase incident."""
+        session = FakeRuntimeSession()
+        session.read_thread_response = {
+            "thread": {
+                "id": "thr-start",
+                "turns": [{"id": "t1", "status": "completed", "createdAt": ""}],
+            },
+        }
+        c0, _, store0, journal0, _ = _build_dialogue_stack(tmp_path, session=session)
+        start = c0.start(tmp_path)
+        pre_runtime = store0.get(start.collaboration_id).runtime_id
+        journal0.write_phase(
+            OperationJournalEntry(
+                idempotency_key="rt-sess-1:thr-start:1",
+                operation="turn_dispatch",
+                phase="dispatched",
+                collaboration_id=start.collaboration_id,
+                created_at="2026-05-17T00:00:00Z",
+                repo_root=str(tmp_path.resolve()),
+                codex_thread_id="thr-start",
+                turn_sequence=1,
+                runtime_id="rt-sess-1",
+                context_size=4096,
+            ),
+            session_id="sess-1",
+        )
+
+        controller, _, store, journal, _ = _build_dialogue_stack(
+            tmp_path,
+            session=session,
+            runtime_prefix="rt1",
+        )
+        controller.recover_startup()
+
+        crash, restart = self._crash_restart(journal)
+        assert len(crash) == 1 and len(restart) == 1
+        assert crash[0]["extra"]["recovery_subject"] == "lineage_handle"
+        assert crash[0]["extra"]["recovery_result"] == "handle_reattached"
+        assert crash[0]["extra"]["recovery_operation"] == "turn_dispatch"
+        assert crash[0]["extra"]["recovery_phase"] == "dispatched"
+        assert crash[0]["runtime_id"] == pre_runtime == "rt-sess-1"
+        assert restart[0]["runtime_id"] == "rt1-sess-1"
+        assert restart[0]["runtime_id"] != crash[0]["runtime_id"]
+        assert (
+            restart[0]["extra"]["crash_recovery_key"]
+            == crash[0]["extra"]["recovery_key"]
+        )
+        assert store.get(start.collaboration_id).runtime_id == "rt1-sess-1"
+
+    def test_recover_turn_dispatch_phase2_quarantine_emits_crash_only(
+        self, tmp_path: Path
+    ) -> None:
+        """Oracle 11 quarantine arm: stale local metadata vs zero completed
+        remote turns forces phase-2 quarantine."""
+        session = FakeRuntimeSession()
+        session.read_thread_response = {"thread": {"id": "thr-start", "turns": []}}
+        controller, _, store, journal, turn_store = _build_dialogue_stack(
+            tmp_path,
+            session=session,
+        )
+        start = controller.start(tmp_path)
+        journal.write_phase(
+            OperationJournalEntry(
+                idempotency_key="rt-sess-1:thr-start:1",
+                operation="turn_dispatch",
+                phase="dispatched",
+                collaboration_id=start.collaboration_id,
+                created_at="2026-05-17T00:00:00Z",
+                repo_root=str(tmp_path.resolve()),
+                codex_thread_id="thr-start",
+                turn_sequence=1,
+                runtime_id="rt-sess-1",
+            ),
+            session_id="sess-1",
+        )
+        turn_store.write(start.collaboration_id, turn_sequence=1, context_size=4096)
+
+        controller.recover_startup()
+
+        crash, restart = self._crash_restart(journal)
+        assert len(crash) == 1 and restart == []
+        assert crash[0]["extra"]["recovery_result"] == "handle_quarantined_unknown"
+        assert crash[0]["extra"]["recovery_operation"] == "turn_dispatch"
+        assert store.get(start.collaboration_id).status == "unknown"
+
+    def test_between_turn_persisted_handle_emits_crash_restart_no_journal_keys(
+        self, tmp_path: Path
+    ) -> None:
+        """Oracle 12: a persisted active handle with no unresolved journal
+        anchor still emits lineage_handle crash+restart on phase-2 reattach."""
+        session = FakeRuntimeSession()
+        c0, _, store0, journal0, _ = _build_dialogue_stack(tmp_path, session=session)
+        start = c0.start(tmp_path)
+        assert journal0.list_unresolved(session_id="sess-1") == []
+        pre_runtime = store0.get(start.collaboration_id).runtime_id
+
+        controller, _, store, journal, _ = _build_dialogue_stack(
+            tmp_path,
+            session=session,
+            runtime_prefix="rt1",
+        )
+        controller.recover_startup()
+
+        crash, restart = self._crash_restart(journal)
+        assert len(crash) == 1 and len(restart) == 1
+        assert "recovery_operation" not in crash[0]["extra"]
+        assert "recovery_phase" not in crash[0]["extra"]
+        assert crash[0]["extra"]["recovery_result"] == "handle_reattached"
+        assert crash[0]["runtime_id"] == pre_runtime == "rt-sess-1"
+        assert restart[0]["runtime_id"] == "rt1-sess-1"
+        assert restart[0]["runtime_id"] != crash[0]["runtime_id"]
+        assert (
+            restart[0]["extra"]["crash_recovery_key"]
+            == crash[0]["extra"]["recovery_key"]
+        )
+        assert store.get(start.collaboration_id).runtime_id == "rt1-sess-1"
+
+    def test_between_turn_persisted_handle_failed_reattach_crash_only(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Oracle 12 quarantine arm: failed phase-2 reattach of a between-turn
+        handle emits crash only."""
+        session = FakeRuntimeSession()
+        controller, _, store, journal, _ = _build_dialogue_stack(
+            tmp_path,
+            session=session,
+        )
+        start = controller.start(tmp_path)
+
+        def _raise_read_thread(thread_id: str) -> dict:
+            raise RuntimeError("read boom")
+
+        monkeypatch.setattr(session, "read_thread", _raise_read_thread)
+
+        controller.recover_startup()
+
+        crash, restart = self._crash_restart(journal)
+        assert len(crash) == 1 and restart == []
+        assert crash[0]["extra"]["recovery_result"] == "handle_quarantined_unknown"
+        assert "recovery_operation" not in crash[0]["extra"]
+        assert store.get(start.collaboration_id).status == "unknown"
+
+    def test_recover_turn_dispatch_intent_confirmed_reattaches_not_noop(
+        self, tmp_path: Path
+    ) -> None:
+        """Oracle 11 intent arm: turn_dispatch:intent is not a no-op."""
+        session = FakeRuntimeSession()
+        session.read_thread_response = {
+            "thread": {
+                "id": "thr-start",
+                "turns": [{"id": "t1", "status": "completed", "createdAt": ""}],
+            },
+        }
+        c0, _, store0, journal0, _ = _build_dialogue_stack(tmp_path, session=session)
+        start = c0.start(tmp_path)
+        pre_runtime = store0.get(start.collaboration_id).runtime_id
+        journal0.write_phase(
+            OperationJournalEntry(
+                idempotency_key="rt-sess-1:thr-start:1",
+                operation="turn_dispatch",
+                phase="intent",
+                collaboration_id=start.collaboration_id,
+                created_at="2026-05-17T00:00:00Z",
+                repo_root=str(tmp_path.resolve()),
+                codex_thread_id="thr-start",
+                turn_sequence=1,
+                runtime_id="rt-sess-1",
+                context_size=4096,
+            ),
+            session_id="sess-1",
+        )
+
+        controller, _, store, journal, _ = _build_dialogue_stack(
+            tmp_path,
+            session=session,
+            runtime_prefix="rt1",
+        )
+        controller.recover_startup()
+
+        crash, restart = self._crash_restart(journal)
+        assert len(crash) == 1 and len(restart) == 1
+        assert crash[0]["extra"]["recovery_result"] == "handle_reattached"
+        assert crash[0]["extra"]["recovery_operation"] == "turn_dispatch"
+        assert crash[0]["extra"]["recovery_phase"] == "intent"
+        assert crash[0]["runtime_id"] == pre_runtime == "rt-sess-1"
+        assert restart[0]["runtime_id"] == "rt1-sess-1"
+        assert restart[0]["runtime_id"] != crash[0]["runtime_id"]
+        assert (
+            restart[0]["extra"]["crash_recovery_key"]
+            == crash[0]["extra"]["recovery_key"]
+        )
+        assert journal.list_unresolved(session_id="sess-1") == []
+        assert store.get(start.collaboration_id).runtime_id == "rt1-sess-1"
+
+    def test_recover_turn_dispatch_intent_unconfirmed_quarantines_crash_only(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Oracle 11 intent quarantine arm: still not a no-op."""
+        session = FakeRuntimeSession()
+        controller, _, store, journal, _ = _build_dialogue_stack(
+            tmp_path,
+            session=session,
+        )
+        start = controller.start(tmp_path)
+        journal.write_phase(
+            OperationJournalEntry(
+                idempotency_key="rt-sess-1:thr-start:1",
+                operation="turn_dispatch",
+                phase="intent",
+                collaboration_id=start.collaboration_id,
+                created_at="2026-05-17T00:00:00Z",
+                repo_root=str(tmp_path.resolve()),
+                codex_thread_id="thr-start",
+                turn_sequence=1,
+                runtime_id="rt-sess-1",
+            ),
+            session_id="sess-1",
+        )
+
+        def _raise_read_thread(thread_id: str) -> dict:
+            raise RuntimeError("read boom")
+
+        monkeypatch.setattr(session, "read_thread", _raise_read_thread)
+
+        controller.recover_startup()
+
+        crash, restart = self._crash_restart(journal)
+        assert len(crash) == 1 and restart == []
+        assert crash[0]["extra"]["recovery_result"] == "handle_quarantined_unknown"
+        assert crash[0]["extra"]["recovery_operation"] == "turn_dispatch"
+        assert crash[0]["extra"]["recovery_phase"] == "intent"
+        assert store.get(start.collaboration_id).status == "unknown"
+
+    def test_second_crash_after_phase1_finalize_degrades_to_between_turn_shape(
+        self, tmp_path: Path
+    ) -> None:
+        """Constraint 3 / design durability: phase-1 finalize plus a second
+        crash before the phase-2 audit append degrades to the between-turn
+        shape."""
+        session = FakeRuntimeSession()
+        session.read_thread_response = {
+            "thread": {
+                "id": "thr-start",
+                "turns": [{"id": "t1", "status": "completed", "createdAt": ""}],
+            },
+        }
+        c0, _, store0, journal0, _ = _build_dialogue_stack(tmp_path, session=session)
+        start = c0.start(tmp_path)
+        journal0.write_phase(
+            OperationJournalEntry(
+                idempotency_key="rt-sess-1:thr-start:1",
+                operation="turn_dispatch",
+                phase="dispatched",
+                collaboration_id=start.collaboration_id,
+                created_at="2026-05-17T00:00:00Z",
+                repo_root=str(tmp_path.resolve()),
+                codex_thread_id="thr-start",
+                turn_sequence=1,
+                runtime_id="rt-sess-1",
+                context_size=4096,
+            ),
+            session_id="sess-1",
+        )
+
+        cA, _, _, journalA, _ = _build_dialogue_stack(tmp_path, session=session)
+        cA.recover_pending_operations()
+        assert journalA.list_unresolved(session_id="sess-1") == []
+        crashA, restartA = self._crash_restart(journalA)
+        assert crashA == [] and restartA == []
+
+        cB, _, storeB, journalB, _ = _build_dialogue_stack(
+            tmp_path,
+            session=session,
+            runtime_prefix="rt1",
+        )
+        cB.recover_startup()
+
+        crash, restart = self._crash_restart(journalB)
+        assert len(crash) == 1 and len(restart) == 1
+        assert "recovery_operation" not in crash[0]["extra"]
+        assert "recovery_phase" not in crash[0]["extra"]
+        assert crash[0]["extra"]["recovery_result"] == "handle_reattached"
+        assert (
+            restart[0]["extra"]["crash_recovery_key"]
+            == crash[0]["extra"]["recovery_key"]
+        )
+        assert crash[0]["runtime_id"] == "rt-sess-1"
+        assert restart[0]["runtime_id"] == "rt1-sess-1"
+        assert storeB.get(start.collaboration_id).runtime_id == "rt1-sess-1"
+
+    def test_audit_append_failure_does_not_corrupt_reattached_handle(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Constraint 7: append failure on the success path only loses the
+        record; it must not corrupt the reattached handle."""
+        session = FakeRuntimeSession()
+        c0, _, store0, journal0, _ = _build_dialogue_stack(tmp_path, session=session)
+        start = c0.start(tmp_path)
+        assert journal0.list_unresolved(session_id="sess-1") == []
+
+        controller, _, store, journal, _ = _build_dialogue_stack(
+            tmp_path,
+            session=session,
+            runtime_prefix="rt1",
+        )
+
+        def _boom(event, *, recovery_key):
+            raise OSError("audit disk full")
+
+        monkeypatch.setattr(journal, "append_recovery_audit_event_once", _boom)
+
+        controller.recover_startup()
+
+        handle = store.get(start.collaboration_id)
+        assert handle.status == "active"
+        assert handle.runtime_id == "rt1-sess-1"
+        crash, restart = self._crash_restart(journal)
+        assert crash == [] and restart == []
+
+    def test_restart_append_failure_after_crash_degrades_to_standalone_crash(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Constraint 7 partial-pair guard: crash append succeeds, restart
+        append fails, and the result is a standalone crash."""
+        session = FakeRuntimeSession()
+        c0, _, store0, journal0, _ = _build_dialogue_stack(tmp_path, session=session)
+        start = c0.start(tmp_path)
+        assert journal0.list_unresolved(session_id="sess-1") == []
+
+        controller, _, store, journal, _ = _build_dialogue_stack(
+            tmp_path,
+            session=session,
+            runtime_prefix="rt1",
+        )
+
+        real = journal.append_recovery_audit_event_once
+        calls = {"n": 0}
+
+        def _fail_second(event, *, recovery_key):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return real(event, recovery_key=recovery_key)
+            raise OSError("audit disk full on restart append")
+
+        monkeypatch.setattr(
+            journal,
+            "append_recovery_audit_event_once",
+            _fail_second,
+        )
+
+        controller.recover_startup()
+
+        handle = store.get(start.collaboration_id)
+        assert handle.status == "active"
+        assert handle.runtime_id == "rt1-sess-1"
+        crash, restart = self._crash_restart(journal)
+        assert len(crash) == 1
+        assert crash[0]["extra"]["recovery_result"] == "handle_reattached"
+        assert restart == []
+
+    def test_clean_startup_emits_no_crash_or_restart(self, tmp_path: Path) -> None:
+        """Oracle 5: no persisted handles means no recovery audit emission."""
+        controller, _, _, journal, _ = _build_dialogue_stack(tmp_path)
+        controller.recover_startup()
+        crash, restart = self._crash_restart(journal)
+        assert crash == [] and restart == []
+
+    def test_recovery_failure_before_reconcile_write_emits_nothing(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Oracle 7: failure before the reconciliation write emits nothing."""
+        session = FakeRuntimeSession()
+        controller, _, _, journal, _ = _build_dialogue_stack(
+            tmp_path,
+            session=session,
+        )
+        journal.write_phase(
+            OperationJournalEntry(
+                idempotency_key="sess-1:fail-7",
+                operation="thread_creation",
+                phase="dispatched",
+                collaboration_id="fail-7",
+                created_at="2026-05-17T00:00:00Z",
+                repo_root=str(tmp_path.resolve()),
+                codex_thread_id="thr-fail",
+            ),
+            session_id="sess-1",
+        )
+
+        def _raise_read_thread(thread_id: str) -> dict:
+            raise RuntimeError("read boom")
+
+        monkeypatch.setattr(session, "read_thread", _raise_read_thread)
+
+        with pytest.raises(RuntimeError, match="read boom"):
+            controller.recover_pending_operations()
+
+        crash, restart = self._crash_restart(journal)
+        assert crash == [] and restart == []
