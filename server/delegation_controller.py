@@ -3017,9 +3017,12 @@ class DelegationController:
                 ),
                 recovery_key=recovery_key,
             )
-        except Exception:
-            logger.warning(
-                "audit recovery crash (operation_journal) append failed",
+        except OSError:
+            logger.error(
+                "Recovery audit append failed for operation_journal; "
+                "forensic record lost; durable recovery state intact. "
+                "Got: idempotency_key=%r",
+                entry.idempotency_key,
                 exc_info=True,
             )
 
@@ -3046,9 +3049,12 @@ class DelegationController:
                 ),
                 recovery_key=recovery_key,
             )
-        except Exception:
-            logger.warning(
-                "audit recovery crash (orphaned_active_job) append failed",
+        except OSError:
+            logger.error(
+                "Recovery audit append failed for orphaned_active_job; "
+                "forensic record lost; durable recovery state intact. "
+                "Got: job_id=%r",
+                job.job_id,
                 exc_info=True,
             )
 

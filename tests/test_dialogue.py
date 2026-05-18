@@ -2584,6 +2584,37 @@ class TestLineageHandleRecoveryAudit:
         assert r["extra"]["crash_recovery_key"] == c["extra"]["recovery_key"]
         assert "recovery:unknown-runtime" not in (r["runtime_id"],)
 
+    def test_recover_startup_thread_creation_dispatched_resumes_once(
+        self, tmp_path: Path
+    ) -> None:
+        """recover_startup() must not re-resume a thread_creation handle in phase 2."""
+        session = FakeRuntimeSession()
+        c0, _, _, journal0, _ = _build_dialogue_stack(tmp_path, session=session)
+        start = c0.start(tmp_path)
+        journal0.write_phase(
+            OperationJournalEntry(
+                idempotency_key="sess-1:redispatch",
+                operation="thread_creation",
+                phase="dispatched",
+                collaboration_id=start.collaboration_id,
+                created_at="2026-05-17T00:00:00Z",
+                repo_root=str(tmp_path.resolve()),
+                codex_thread_id="thr-start",
+            ),
+            session_id="sess-1",
+        )
+
+        controller, _, _, journal, _ = _build_dialogue_stack(
+            tmp_path,
+            session=session,
+            runtime_prefix="rt1",
+        )
+        controller.recover_startup()
+
+        crash, restart = self._crash_restart(journal)
+        assert len(crash) == 1 and len(restart) == 1
+        assert session.resumed_threads == ["thr-start"]
+
     def test_recover_thread_creation_dispatched_no_handle_emits_sentinel_crash_and_real_restart(
         self, tmp_path: Path
     ) -> None:
@@ -2942,7 +2973,7 @@ class TestLineageHandleRecoveryAudit:
         assert storeB.get(start.collaboration_id).runtime_id == "rt1-sess-1"
 
     def test_audit_append_failure_does_not_corrupt_reattached_handle(
-        self, tmp_path: Path, monkeypatch
+        self, tmp_path: Path, monkeypatch, caplog: pytest.LogCaptureFixture
     ) -> None:
         """Constraint 7: append failure on the success path only loses the
         record; it must not corrupt the reattached handle."""
@@ -2962,9 +2993,43 @@ class TestLineageHandleRecoveryAudit:
 
         monkeypatch.setattr(journal, "append_recovery_audit_event_once", _boom)
 
-        controller.recover_startup()
+        with caplog.at_level("ERROR", logger="server.dialogue"):
+            controller.recover_startup()
 
         handle = store.get(start.collaboration_id)
+        assert handle.status == "active"
+        assert handle.runtime_id == "rt1-sess-1"
+        crash, restart = self._crash_restart(journal)
+        assert crash == [] and restart == []
+        assert any(
+            "forensic record lost; durable recovery state intact" in msg
+            for msg in caplog.messages
+        )
+
+    def test_recovery_audit_valueerror_propagates_after_reattach(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Programming errors in recovery audit emission must stay loud."""
+        session = FakeRuntimeSession()
+        c0, _, _, _, _ = _build_dialogue_stack(tmp_path, session=session)
+        start = c0.start(tmp_path)
+
+        controller, _, store, journal, _ = _build_dialogue_stack(
+            tmp_path,
+            session=session,
+            runtime_prefix="rt1",
+        )
+
+        def _boom(event, *, recovery_key):
+            raise ValueError("recovery key mismatch")
+
+        monkeypatch.setattr(journal, "append_recovery_audit_event_once", _boom)
+
+        with pytest.raises(ValueError, match="recovery key mismatch"):
+            controller.recover_startup()
+
+        handle = store.get(start.collaboration_id)
+        assert handle is not None
         assert handle.status == "active"
         assert handle.runtime_id == "rt1-sess-1"
         crash, restart = self._crash_restart(journal)

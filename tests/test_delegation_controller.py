@@ -1181,6 +1181,36 @@ def test_recover_startup_operation_journal_dispatched_emits_crash_real_runtime(
     )
 
 
+def test_recover_startup_operation_journal_second_pass_does_not_reemit_crash(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    controller, _, _, _, _, journal, _, _ = _build_controller(tmp_path)
+    _write_unresolved_dispatched(
+        journal,
+        "sess-1",
+        idempotency_key="sess-1:disp-key",
+        collaboration_id="collab-1",
+        job_id="job-1",
+        runtime_id="rt-real",
+        thread_id="thr-1",
+        repo_root=repo_root,
+    )
+
+    controller.recover_startup()
+    plugin_data = tmp_path / "data"
+    assert len(_recovery_events(plugin_data, "crash")) == 1
+
+    controller2, _, _, _, _, _, _, _ = _build_controller(
+        tmp_path,
+        session_id="sess-1",
+    )
+    controller2.recover_startup()
+
+    assert len(_recovery_events(plugin_data, "crash")) == 1
+
+
 def test_recover_startup_marks_dispatched_handle_and_job_unknown(
     tmp_path: Path,
 ) -> None:
@@ -1416,6 +1446,40 @@ def test_recover_startup_orphaned_active_job_emits_crash_only(
     assert "recovery_phase" not in event["extra"]
 
 
+def test_recover_startup_orphaned_active_job_second_pass_does_not_reemit_crash(
+    tmp_path: Path,
+) -> None:
+    _, _, _, job_store, _, _, _, _ = _build_controller(tmp_path)
+    job_store.create(
+        DelegationJob(
+            job_id="job-orphan",
+            runtime_id="rt-orphan",
+            collaboration_id="collab-orphan",
+            base_commit="head-abc",
+            worktree_path="/tmp/wk",
+            promotion_state=None,
+            status="running",
+        )
+    )
+
+    controller1, _, _, _, _, _, _, _ = _build_controller(
+        tmp_path,
+        session_id="sess-1",
+    )
+    controller1.recover_startup()
+
+    plugin_data = tmp_path / "data"
+    assert len(_recovery_events(plugin_data, "crash")) == 1
+
+    controller2, _, _, _, _, _, _, _ = _build_controller(
+        tmp_path,
+        session_id="sess-1",
+    )
+    controller2.recover_startup()
+
+    assert len(_recovery_events(plugin_data, "crash")) == 1
+
+
 def test_recover_startup_orphaned_needs_escalation_job_emits_crash_only(
     tmp_path: Path,
 ) -> None:
@@ -1452,7 +1516,9 @@ def test_recover_startup_orphaned_needs_escalation_job_emits_crash_only(
 
 
 def test_operation_journal_append_isolation_does_not_block_reconcile(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path,
+    monkeypatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Constraint 7: operation_journal append failures must not block the
     durable reconcile."""
@@ -1475,7 +1541,43 @@ def test_operation_journal_append_isolation_does_not_block_reconcile(
 
     monkeypatch.setattr(journal, "append_recovery_audit_event_once", _boom)
 
-    controller.recover_startup()
+    with caplog.at_level("ERROR", logger="server.delegation_controller"):
+        controller.recover_startup()
+
+    assert journal.list_unresolved(session_id="sess-1") == []
+    plugin_data = tmp_path / "data"
+    assert _recovery_events(plugin_data, "crash") == []
+    assert any(
+        "forensic record lost; durable recovery state intact" in msg
+        for msg in caplog.messages
+    )
+
+
+def test_operation_journal_append_valueerror_propagates_after_reconcile(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    controller, _, _, _, _, journal, _, _ = _build_controller(tmp_path)
+    _write_unresolved_dispatched(
+        journal,
+        "sess-1",
+        idempotency_key="sess-1:disp-key",
+        collaboration_id="collab-1",
+        job_id="job-1",
+        runtime_id="rt-real",
+        thread_id="thr-1",
+        repo_root=repo_root,
+    )
+
+    def _boom(event, *, recovery_key):
+        raise ValueError("recovery key mismatch")
+
+    monkeypatch.setattr(journal, "append_recovery_audit_event_once", _boom)
+
+    with pytest.raises(ValueError, match="recovery key mismatch"):
+        controller.recover_startup()
 
     assert journal.list_unresolved(session_id="sess-1") == []
     plugin_data = tmp_path / "data"
@@ -1483,7 +1585,9 @@ def test_operation_journal_append_isolation_does_not_block_reconcile(
 
 
 def test_orphaned_active_job_append_isolation_does_not_reverse_unknown(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path,
+    monkeypatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Constraint 7: orphaned_active_job append failures must not reverse the
     durable unknown transition."""
@@ -1510,7 +1614,47 @@ def test_orphaned_active_job_append_isolation_does_not_reverse_unknown(
 
     monkeypatch.setattr(journal2, "append_recovery_audit_event_once", _boom)
 
-    controller2.recover_startup()
+    with caplog.at_level("ERROR", logger="server.delegation_controller"):
+        controller2.recover_startup()
+
+    assert store2.get("job-orphan").status == "unknown"
+    plugin_data = tmp_path / "data"
+    assert _recovery_events(plugin_data, "crash") == []
+    assert any(
+        "forensic record lost; durable recovery state intact" in msg
+        for msg in caplog.messages
+    )
+
+
+def test_orphaned_active_job_append_valueerror_propagates_after_unknown_transition(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _, _, _, job_store, _, _, _, _ = _build_controller(tmp_path)
+    job_store.create(
+        DelegationJob(
+            job_id="job-orphan",
+            runtime_id="rt-orphan",
+            collaboration_id="collab-orphan",
+            base_commit="head-abc",
+            worktree_path="/tmp/wk",
+            promotion_state=None,
+            status="running",
+        )
+    )
+
+    controller2, _, _, store2, _, journal2, _, _ = _build_controller(
+        tmp_path,
+        session_id="sess-1",
+    )
+
+    def _boom(event, *, recovery_key):
+        raise ValueError("recovery key mismatch")
+
+    monkeypatch.setattr(journal2, "append_recovery_audit_event_once", _boom)
+
+    with pytest.raises(ValueError, match="recovery key mismatch"):
+        controller2.recover_startup()
 
     assert store2.get("job-orphan").status == "unknown"
     plugin_data = tmp_path / "data"
@@ -2823,6 +2967,10 @@ def test_recover_startup_marks_dispatched_approval_resolution_unknown(
     assert handle is not None and handle.status == "unknown"
     assert journal.list_unresolved(session_id="sess-1") == []
     plugin_data = tmp_path / "data"
+    assert all(
+        event.get("extra", {}).get("recovery_subject") != "lineage_handle"
+        for event in _recovery_events(plugin_data, "crash")
+    )
     crash = [
         event
         for event in _recovery_events(plugin_data, "crash")

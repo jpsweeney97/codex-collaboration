@@ -1104,6 +1104,35 @@ def test_ensure_audit_seen_loaded_quarantines_on_invalid_utf8(
     assert journal._audit_seen == {("dialogue_turn", "collab-1", "turn-1")}
 
 
+def test_ensure_recovery_audit_seen_loaded_quarantines_on_invalid_utf8(
+    tmp_path: Path,
+) -> None:
+    now = datetime(2026, 5, 12, 19, 37, 15, tzinfo=UTC)
+    journal = OperationJournal(tmp_path / "plugin-data", clock=_fixed_clock(now))
+    audit_path = tmp_path / "plugin-data" / "audit" / "events.jsonl"
+    audit_path.write_bytes(
+        (
+            '{"event_id":"ghost","timestamp":"2026-05-01T00:00:00Z",'
+            '"actor":"system","action":"crash",'
+            '"collaboration_id":"collab-1","runtime_id":"rt-1",'
+            '"extra":{"recovery_key":"lineage_handle:collab-1:crash"}}\n'
+        ).encode("utf-8")
+        + b"\x80abc\n"
+    )
+
+    journal.append_recovery_audit_event_once(
+        _recovery_audit_event(event_id="fresh"),
+        recovery_key="lineage_handle:collab-1:crash",
+    )
+
+    quarantine_path = audit_path.with_name("events.corrupt-20260512T193715Z.jsonl")
+    assert quarantine_path.exists()
+    assert [record["event_id"] for record in _read_jsonl(audit_path)] == ["fresh"]
+    assert journal._recovery_audit_seen == {
+        ("crash", "lineage_handle:collab-1:crash")
+    }
+
+
 def test_ensure_outcomes_seen_loaded_quarantines_on_invalid_utf8(
     tmp_path: Path,
 ) -> None:
