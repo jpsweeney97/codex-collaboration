@@ -3011,6 +3011,43 @@ class TestLineageHandleRecoveryAudit:
         assert crash[0]["extra"]["recovery_result"] == "handle_reattached"
         assert restart == []
 
+    def test_eager_then_lazy_recovery_does_not_duplicate_crash_restart(
+        self, tmp_path: Path
+    ) -> None:
+        """Oracle 6: persisted recovery dedup survives fresh-process runtime
+        mutation because the lineage_handle stem keys on collaboration_id."""
+        session = FakeRuntimeSession()
+        c0, _, store0, _, _ = _build_dialogue_stack(tmp_path, session=session)
+        start = c0.start(tmp_path)
+        assert store0.get(start.collaboration_id).runtime_id == "rt-sess-1"
+
+        c1, _, store1, journal1, _ = _build_dialogue_stack(
+            tmp_path,
+            session=session,
+            runtime_prefix="rt1",
+        )
+        c1.recover_startup()
+        crash, restart = self._crash_restart(journal1)
+        assert len(crash) == 1 and len(restart) == 1
+        assert crash[0]["runtime_id"] == "rt-sess-1"
+        assert restart[0]["runtime_id"] == "rt1-sess-1"
+        assert store1.get(start.collaboration_id).runtime_id == "rt1-sess-1"
+        crash_key = crash[0]["extra"]["recovery_key"]
+        assert crash_key == f"lineage_handle:{start.collaboration_id}:crash"
+        assert "rt-sess-1" not in crash_key and "rt1-sess-1" not in crash_key
+
+        c2, _, store2, journal2, _ = _build_dialogue_stack(
+            tmp_path,
+            session=session,
+            runtime_prefix="rt2",
+        )
+        c2.recover_startup()
+        crash2, restart2 = self._crash_restart(journal2)
+        assert len(crash2) == 1 and len(restart2) == 1
+        assert crash2[0]["extra"]["recovery_key"] == crash_key
+        assert crash2[0]["collaboration_id"] == start.collaboration_id
+        assert store2.get(start.collaboration_id).runtime_id == "rt2-sess-1"
+
     def test_clean_startup_emits_no_crash_or_restart(self, tmp_path: Path) -> None:
         """Oracle 5: no persisted handles means no recovery audit emission."""
         controller, _, _, journal, _ = _build_dialogue_stack(tmp_path)

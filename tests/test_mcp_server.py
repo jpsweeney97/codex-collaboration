@@ -850,6 +850,33 @@ class _RecordingDelegationController:
         )
 
 
+class _RecordingDialogueController:
+    """Integer call-count spy — distinguishes 1 vs >1 recover_startup calls."""
+
+    def __init__(self) -> None:
+        self.recover_startup_calls = 0
+
+    def recover_startup(self) -> None:
+        self.recover_startup_calls += 1
+
+    def start(
+        self,
+        repo_root: Path,
+        *,
+        profile_name: str | None = None,
+        explicit_posture: str | None = None,
+        explicit_turn_budget: int | None = None,
+    ) -> object:
+        from server.models import DialogueStartResult
+
+        return DialogueStartResult(
+            collaboration_id="c1",
+            runtime_id="r1",
+            status="active",
+            created_at="2026-03-28T00:00:00Z",
+        )
+
+
 class _FailOnceDelegationController:
     """Controller that raises from ``recover_startup`` a configurable number of
     times before succeeding. Used to prove retry-on-recovery-failure semantics
@@ -1042,6 +1069,32 @@ class TestDelegationRecoveryWiring:
         # Idempotent — second startup call is a no-op.
         server.startup()
         assert controller.recover_startup_calls == 1
+
+
+def test_eager_startup_then_tool_call_runs_dialogue_recovery_exactly_once() -> None:
+    """Oracle 6 eager half: startup() runs dialogue recovery once and a later
+    dialogue tool call reuses the pinned controller without re-running it."""
+    controller = _RecordingDialogueController()
+    server = McpServer(
+        control_plane=FakeControlPlane(),
+        dialogue_controller=controller,
+    )
+    server.startup()
+    server.startup()
+    assert controller.recover_startup_calls == 1
+
+    server.handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "codex.dialogue.start",
+                "arguments": {"repo_root": "/tmp/test-repo"},
+            },
+        }
+    )
+    assert controller.recover_startup_calls == 1
 
 
 class FakeDelegationControllerWithPoll:
