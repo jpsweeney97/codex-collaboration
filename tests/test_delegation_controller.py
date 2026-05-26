@@ -271,6 +271,17 @@ def _build_controller(
     )
 
 
+def _assert_reescalation_cleanup_decide_result(result: Any) -> None:
+    """Accept the Packet 1 consuming-window race only for cleanup decides."""
+    from server.models import DecisionRejectedResponse, DelegationDecisionResult
+
+    if isinstance(result, DelegationDecisionResult):
+        assert result.decision_accepted is True
+        return
+    assert isinstance(result, DecisionRejectedResponse)
+    assert result.reason == "request_already_decided"
+
+
 def test_start_tracks_finished_worker_thread_for_drain(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2311,8 +2322,7 @@ def test_decide_approve_can_reescalate_with_new_pending_request(tmp_path: Path) 
         request_id="99",
         decision="deny",
     )
-    assert isinstance(second_result, DelegationDecisionResult)
-    assert second_result.decision_accepted is True
+    _assert_reescalation_cleanup_decide_result(second_result)
     drain = controller.drain_workers(timeout=5.0)
     assert drain.alive_thread_names == ()
 
@@ -3073,8 +3083,7 @@ def test_decide_rejects_stale_request_id_after_reescalation(tmp_path: Path) -> N
         request_id="99",
         decision="deny",
     )
-    assert isinstance(cleanup_result, DelegationDecisionResult)
-    assert cleanup_result.decision_accepted is True
+    _assert_reescalation_cleanup_decide_result(cleanup_result)
     drain = controller.drain_workers(timeout=5.0)
     assert drain.alive_thread_names == ()
 

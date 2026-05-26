@@ -1029,6 +1029,14 @@ def _assert_no_internal_ids(payload: dict[str, Any], key: str) -> None:
         )
 
 
+def _assert_reescalation_cleanup_payload(payload: dict[str, Any]) -> None:
+    """Accept the Packet 1 consuming-window race only for cleanup decides."""
+    if payload.get("decision_accepted") is True:
+        return
+    assert payload.get("rejected") is True
+    assert payload.get("reason") == "request_already_decided"
+
+
 def test_start_escalation_uses_pending_escalation_key(tmp_path: Path) -> None:
     """codex.delegate.start escalation must use 'pending_escalation', not 'pending_request'."""
     repo_root = tmp_path / "repo"
@@ -1232,7 +1240,7 @@ def test_decide_reescalation_uses_pending_escalation_key(tmp_path: Path) -> None
         }
     )
     cleanup_payload = json.loads(cleanup_response["result"]["content"][0]["text"])
-    assert cleanup_payload["decision_accepted"] is True
+    _assert_reescalation_cleanup_payload(cleanup_payload)
     drain = controller.drain_workers(timeout=5.0)
     assert drain.alive_thread_names == ()
 
