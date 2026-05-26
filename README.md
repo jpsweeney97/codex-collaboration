@@ -4,6 +4,8 @@ Codex advisory consultation, durable dialogue, and isolated delegation via direc
 
 > **Authority:** This repository is the **sole authority** for `codex-collaboration` source, tests, specs, status, tickets, and operational documentation. The repository was extracted from `claude-code-tool-dev` on 2026-05-11; see [docs/migration/monorepo-extraction-manifest.md](docs/migration/monorepo-extraction-manifest.md) for provenance and verification evidence.
 
+For live project state, start with [docs/status/current-state.md](docs/status/current-state.md) and use [docs/status/reconciliation-register.md](docs/status/reconciliation-register.md) as the bounded open-work index. This README is supporting orientation, not the behavioral source of truth.
+
 ## Repository Layout
 
 ```
@@ -41,11 +43,13 @@ Codex advisory consultation, durable dialogue, and isolated delegation via direc
 | Requirement | Purpose | Install | Check |
 |-------------|---------|---------|-------|
 | Claude Code | Plugin host | [claude.ai/download](https://claude.ai/download) | `claude --version` |
-| Codex CLI 0.117.0+ | Advisory runtime | `npm install -g @openai/codex` | `codex --version` |
+| Codex CLI >= 0.117.0 | App Server runtime | Install Codex CLI via your standard supported channel | `codex --version` |
 | Python 3.11+ | MCP server and hooks | via your runtime manager | `uv run python --version` |
 | uv | Package management | `curl -LsSf https://astral.sh/uv/install.sh \| sh` | `uv --version` |
 
 **Authentication:** Run `codex login` or set `OPENAI_API_KEY`.
+
+**Current compatibility boundary:** Startup rejects `codex-cli` versions below `0.117.0` and probes the live App Server method surface on newer installs. The vendored tested schema baseline is still `0.117.0`, so a successful startup preflight is not, by itself, proof of full delegation or permission-surface support on newer binaries. Track the open rebaseline and contract-boundary work in [T-20260516-01](docs/tickets/2026-05-16-codex-app-server-version-upgrade.md) and [T-20260516-02](docs/tickets/2026-05-16-codex-app-server-contract-versioning.md).
 
 ## Local Development
 
@@ -70,7 +74,7 @@ The plugin root is the repository root. `.mcp.json` and `hooks/hooks.json` use `
 claude --plugin-dir /path/to/codex-collaboration
 ```
 
-## Smoke Test (after install)
+## Advisory Smoke Test (after install)
 
 1. **Check plugin loaded:**
    ```
@@ -89,6 +93,8 @@ claude --plugin-dir /path/to/codex-collaboration
    /consult-codex What is the purpose of this repository?
    ```
    Should perform a `codex.status` preflight, then dispatch a consultation and relay the result.
+
+This smoke path exercises advisory surfaces only. `/delegate` is intentionally excluded from the default smoke; execution readiness still depends on the open compatibility and closeout gates tracked in [T-20260516-01](docs/tickets/2026-05-16-codex-app-server-version-upgrade.md), [T-20260516-02](docs/tickets/2026-05-16-codex-app-server-contract-versioning.md), and [T-20260429-01](docs/tickets/2026-04-29-codex-collaboration-delegation-friction-reduction.md).
 
 ## Skills
 
@@ -117,13 +123,15 @@ Agents are spawned by skills and are not directly user-invocable.
 
 ## Architecture
 
-The plugin runs a stdio MCP server (`scripts/codex_runtime_bootstrap.py`) that exposes 11 tools across three capability tiers:
+The plugin runs a stdio MCP server (`scripts/codex_runtime_bootstrap.py`) that exposes 10 tools across three capability tiers:
 
 | Tier | Tools | Transport |
 |------|-------|-----------|
 | **Advisory** (read-only) | `codex.status`, `codex.consult` | Subprocess JSON-RPC to `codex app-server` |
 | **Dialogue** (multi-turn advisory) | `codex.dialogue.start`, `.reply`, `.read` | Same transport, session-scoped lineage |
 | **Delegation** (execution) | `codex.delegate.start`, `.poll`, `.decide`, `.promote`, `.discard` | Isolated git worktree, background worker thread |
+
+A standalone `codex.dialogue.fork` tool is not currently exposed. Future copy-and-diverge support is planned via `seed_from` on `codex.dialogue.start`.
 
 The server communicates with the Codex App Server via JSON-RPC (`server/runtime.py`). Advisory runtimes are cached per repo root and invalidated on transport failure or delegation promotion. Delegation runs in isolated git worktrees with per-request approval routing and artifact-verified promotion (`server/delegation_controller.py`). A journal-based 3-phase commit (intent → dispatched → completed) provides crash recovery for multi-step operations.
 
@@ -143,7 +151,7 @@ All content-bearing Codex tool calls (`codex.consult`, `codex.dialogue.start`, `
 
 ### Containment (subagent scope enforcement)
 
-Dialogue and shakedown agents run under a containment system that restricts file access to declared scope directories:
+Only `dialogue-orchestrator` and `shakedown-dialogue` run under a containment system that restricts file access to declared scope directories. The `/dialogue` pre-gatherers (`context-gatherer-code`, `context-gatherer-falsifier`) are read-only and intentionally run outside containment.
 
 - **Containment lifecycle** (`scripts/containment_lifecycle.py`): `SubagentStart` hook promotes a seed file to an active scope file; `SubagentStop` hook removes the scope file and captures the transcript.
 - **Containment guard** (`scripts/containment_guard.py`): `PreToolUse` hook blocks `Read`, `Grep`, and `Glob` calls outside the declared scope. No-op outside subagent contexts where no scope file is active.
@@ -152,7 +160,7 @@ Dialogue and shakedown agents run under a containment system that restricts file
 
 - **Consultation profiles** (`server/profiles.py`): Named profiles resolving posture, turn budget, reasoning effort, sandbox, and approval policy.
 - **Learning retrieval** (`server/retrieve_learnings.py`): Tag/keyword-matched learnings from `docs/learnings/learnings.md` injected into advisory briefings via the context assembly pipeline.
-- **Analytics emission**: `OutcomeRecord` persisted to `analytics/outcomes.jsonl` under the plugin data path (returned by `codex.status`) for consult and dialogue outcomes.
+- **Analytics emission**: advisory `OutcomeRecord` and delegation `DelegationOutcomeRecord` terminal outcomes are persisted to `analytics/outcomes.jsonl` under the plugin data path (returned by `codex.status`). This is an operational-diagnostics stream with a 30-day retention horizon, not long-term history.
 
 ## Hooks
 
@@ -189,7 +197,7 @@ uv run pytest tests/test_runtime.py # single file
 uv run ruff check .                 # lint
 ```
 
-A local convenience script is also provided:
+A local convenience script is also provided for the same full marker-inclusive gate CI runs:
 
 ```bash
 ./scripts/check

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Local check script — runs the same gates as CI.
+# Local check script — runs the same full verification gates as CI.
 # Usage: ./scripts/check
 
 set -euo pipefail
@@ -16,8 +16,8 @@ uv sync
 echo "==> ruff check"
 uv run ruff check .
 
-echo "==> pytest (full suite, ~4 min)"
-uv run pytest tests -q
+echo "==> pytest (full marker-inclusive suite, CI-equivalent)"
+uv run pytest tests -q -m ""
 
 echo "==> JSON config validation"
 uv run python -m json.tool .mcp.json > /dev/null && echo "  .mcp.json OK"
