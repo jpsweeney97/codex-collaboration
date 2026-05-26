@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -7,9 +8,17 @@ import pytest
 from server.context_assembly import ContextAssemblyError, assemble_context_packet
 from server.models import ConsultRequest, RepoIdentity
 
+_OPENAI_KEY_SHAPED_VALUE_RE = re.compile(r"\b" + "sk" + r"-[A-Za-z0-9_-]{20,}")
+
 
 def _repo_identity(repo_root: Path) -> RepoIdentity:
     return RepoIdentity(repo_root=repo_root, branch="main", head="abc123")
+
+
+def test_context_assembly_tests_do_not_commit_provider_key_literals() -> None:
+    source = Path(__file__).read_text(encoding="utf-8")
+
+    assert _OPENAI_KEY_SHAPED_VALUE_RE.search(source) is None
 
 
 def test_assemble_context_packet_records_context_size(tmp_path: Path) -> None:
@@ -58,7 +67,7 @@ def test_assembly_trims_low_priority_categories_first(tmp_path: Path) -> None:
 
 def test_assembly_redacts_secrets_from_files_and_snippets(tmp_path: Path) -> None:
     # sk- key needs 40+ chars after prefix for new taxonomy (openai_api_key family)
-    sk_key = "sk-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN"
+    sk_key = "sk-" + "abcdefghijklmnopqrstuvwxyz" + "ABCDEFGHIJKLMN"
     # Bearer token needs 20+ chars for new taxonomy (bearer_auth_header family)
     bearer_token = "Bearer abcdefghijklmnopqrst"
     jwt = (
