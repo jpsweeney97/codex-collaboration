@@ -57,5 +57,8 @@ CLAUDE.local.md
 # See AGENTS.md Handoffs section for the operational policy + promotion procedure.
 docs/handoffs/
 
+# Codex local handoff/session state.
+.codex/handoffs/
+
 # uv lock is tracked; remove this line to ignore it
 # uv.lock
