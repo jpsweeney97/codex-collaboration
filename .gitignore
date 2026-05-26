@@ -41,6 +41,9 @@ tmp/
 # Tech debt audit workspace (transient artifacts from /tech-debt-audit)
 .tech-debt-audit-workspace/
 
+# README workspace (transient artifacts from /readme)
+.readme-workspace/
+
 # Local secrets / settings overrides
 .env
 .env.local
