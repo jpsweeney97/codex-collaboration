@@ -1,0 +1,15 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "codex-collaboration-dev",
+  "description": "Development marketplace exposing the codex-collaboration plugin from this repo.",
+  "owner": { "name": "JP" },
+  "plugins": [
+    {
+      "name": "codex-collaboration",
+      "description": "Codex advisory consultation, durable dialogue, and isolated delegation via direct JSON-RPC to the Codex App Server",
+      "author": { "name": "JP" },
+      "category": "collaboration",
+      "source": "./"
+    }
+  ]
+}

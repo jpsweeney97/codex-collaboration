@@ -6,5 +6,6 @@
     "name": "JP"
   },
   "license": "MIT",
-  "keywords": ["codex", "consultation", "dialogue", "delegation", "advisory", "collaboration"]
+  "keywords": ["codex", "consultation", "dialogue", "delegation", "advisory", "collaboration"],
+  "mcpServers": "./.claude-plugin/mcp-config.json"
 }
