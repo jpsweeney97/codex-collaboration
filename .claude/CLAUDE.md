@@ -86,7 +86,8 @@ Session handoffs live in `docs/handoffs/`. Older handoffs migrate to `docs/hando
 
 ## Migration-Era Cautions
 
-- The package's MCP tool prefix is `mcp__plugin_codex-collaboration_codex-collaboration__*`. Hook matchers, skill `allowed-tools`, and agent `tools` frontmatter must use this exact prefix.
+- The MCP server config lives at `.claude-plugin/mcp-config.json` and is loaded via `mcpServers: "./.claude-plugin/mcp-config.json"` in `.claude-plugin/plugin.json`. There is intentionally **no `.mcp.json` at the repo root** — putting one there causes the project-scope MCP reader to register the server under an un-prefixed tool name, which then dedup-collides with the plugin-scope read. Project wins (priority 2 > plugin priority 4), the plugin's registration is skipped, and the plugin-prefixed tool names every agent/hook/skill references are never created. If you ever see `claude mcp list` show both a `plugin:codex-collaboration:codex-collaboration` entry *and* an un-prefixed `codex-collaboration` entry — or a "MCP server codex-collaboration skipped — same command/URL" warning at startup — check for a stray root `.mcp.json` and remove it.
+- The package's MCP tool prefix is `mcp__plugin_codex-collaboration_codex-collaboration__*`. This prefix is what the plugin-scope loader produces when the layout above is intact; it is the only form registered. Hook matchers, skill `allowed-tools`, and agent `tools` frontmatter must use this exact prefix.
 - The original package shipped with `version = "0.1.0"` in `pyproject.toml` while plugin manifest declared `version = "0.2.0"`. The mismatch was inherited from the monorepo; if you bump the plugin, update both.
 - Tests assume `pyproject.toml`'s `[tool.pytest.ini_options]` adds the repo root to `pythonpath`. Direct imports like `from server.runtime import ...` rely on this.
 
