@@ -18,8 +18,10 @@ For live project state, start with [docs/status/current-state.md](docs/status/cu
 ├── hooks/                   # Hook configuration (hooks.json)
 ├── references/              # Reference material (tag grammar, dialogue contract)
 ├── tests/                   # pytest suite (~1250 tests) + JSON fixtures
-├── .mcp.json                # MCP server registration
-├── .claude-plugin/          # Plugin manifest (plugin.json)
+├── .claude-plugin/
+│   ├── plugin.json          # Plugin manifest
+│   ├── mcp-config.json      # MCP server registration (referenced by plugin.json mcpServers)
+│   └── marketplace.json     # Plugin marketplace metadata (discovery-only)
 ├── pyproject.toml           # Standalone Python project
 ├── docs/
 │   ├── specs/               # Authoritative specs (foundations, contracts, delivery, ...)
@@ -64,7 +66,7 @@ uv run pytest tests -q -m ""        # full marker-inclusive suite
 uv run ruff check .
 ```
 
-The plugin root is the repository root. `.mcp.json` and `hooks/hooks.json` use `${CLAUDE_PLUGIN_ROOT}` which Claude Code resolves to the directory containing `.claude-plugin/plugin.json` — i.e., this repo's root.
+The plugin root is the repository root. `.claude-plugin/mcp-config.json` and `hooks/hooks.json` use `${CLAUDE_PLUGIN_ROOT}` which Claude Code resolves to the directory containing `.claude-plugin/plugin.json` — i.e., this repo's root. The MCP server is wired via the `mcpServers` field in `plugin.json`, not through a root-level `.mcp.json`; see [`docs/specs/delivery.md`](docs/specs/delivery.md) §Plugin Component Structure for the normative layout and `.claude/CLAUDE.md` §Migration-Era Cautions for why root `.mcp.json` must not be reintroduced.
 
 ## Install as a Claude Code Plugin
 

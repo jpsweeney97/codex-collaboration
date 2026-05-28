@@ -6,7 +6,7 @@ and delegation initialization are deferred until the first tool call
 on each surface, at which point the published session identity is read
 and pinned.
 
-Launch pattern (from .mcp.json):
+Launch pattern (from .claude-plugin/mcp-config.json):
   uv run --directory ${CLAUDE_PLUGIN_ROOT} python \
       ${CLAUDE_PLUGIN_ROOT}/scripts/codex_runtime_bootstrap.py
 

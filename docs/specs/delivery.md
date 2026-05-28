@@ -27,8 +27,9 @@ Plugin ID: `codex-collaboration`
 ```text
 
 ├── .claude-plugin/
-│   └── plugin.json
-├── .mcp.json
+│   ├── plugin.json
+│   ├── mcp-config.json
+│   └── marketplace.json
 ├── agents/
 │   ├── context-gatherer-code.md
 │   ├── context-gatherer-falsifier.md

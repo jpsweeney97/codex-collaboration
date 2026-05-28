@@ -31,6 +31,11 @@ jobs:
 
       - name: Validate JSON configs
         run: |
-          python -m json.tool .mcp.json > /dev/null
+          if [ -e .mcp.json ] || [ -L .mcp.json ]; then
+            echo "repo-root .mcp.json must not exist; use .claude-plugin/mcp-config.json" >&2
+            exit 1
+          fi
           python -m json.tool .claude-plugin/plugin.json > /dev/null
+          python -m json.tool .claude-plugin/mcp-config.json > /dev/null
+          python -m json.tool .claude-plugin/marketplace.json > /dev/null
           python -m json.tool hooks/hooks.json > /dev/null

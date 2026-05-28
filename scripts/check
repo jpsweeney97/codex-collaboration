@@ -20,8 +20,13 @@ echo "==> pytest (full marker-inclusive suite, CI-equivalent)"
 uv run pytest tests -q -m ""
 
 echo "==> JSON config validation"
-uv run python -m json.tool .mcp.json > /dev/null && echo "  .mcp.json OK"
+if [ -e .mcp.json ] || [ -L .mcp.json ]; then
+  echo "  ERROR: repo-root .mcp.json must not exist; use .claude-plugin/mcp-config.json" >&2
+  exit 1
+fi
 uv run python -m json.tool .claude-plugin/plugin.json > /dev/null && echo "  .claude-plugin/plugin.json OK"
+uv run python -m json.tool .claude-plugin/mcp-config.json > /dev/null && echo "  .claude-plugin/mcp-config.json OK"
+uv run python -m json.tool .claude-plugin/marketplace.json > /dev/null && echo "  .claude-plugin/marketplace.json OK"
 uv run python -m json.tool hooks/hooks.json > /dev/null && echo "  hooks/hooks.json OK"
 
 echo "==> import smoke (modules load from new root)"

@@ -572,3 +572,12 @@ Git history preservation is **deferred**. The monorepo retains the commit histor
 3. Replace this repo's initial-commit history with the filtered history (or merge into a new branch and rebase).
 
 Until then, this manifest plus the source commit SHA in Provenance is the authoritative provenance bridge.
+
+## 2026-05-28 Post-Extraction Layout Relocation Addendum
+
+The MCP configuration relocated from repo-root `.mcp.json` to `.claude-plugin/mcp-config.json` on `chore/plugin-install-mode` (commits `64a1ca3`, `1211d0a`, plus the same-train follow-ups in this commit). This addendum supersedes the following extraction-era rows without rewriting them (history-preservation principle):
+
+- **Inventory line 55** — the `Migrated-Active` row mapping `packages/plugins/codex-collaboration/.mcp.json` → `.mcp.json` is superseded. The canonical destination is now `.claude-plugin/mcp-config.json`, referenced by `plugin.json` via the `mcpServers` field.
+- **Verification line 498** — the `MCP config` gate row recording `uv run python -m json.tool .mcp.json | OK` is superseded. The current equivalent gates are `uv run python -m json.tool .claude-plugin/mcp-config.json | OK` and `uv run python -m json.tool .claude-plugin/marketplace.json | OK`. The original row reflected verified state at extraction time (2026-05-11) and is preserved as-is.
+
+See `.claude/CLAUDE.md` §Migration-Era Cautions for the regression markers and rationale.
