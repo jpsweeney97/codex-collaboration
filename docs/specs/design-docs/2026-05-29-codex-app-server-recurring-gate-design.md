@@ -2,11 +2,26 @@
 
 **Date:** 2026-05-29
 **Status:** Draft (design) — non-normative until accepted
-**Owner docs (on acceptance):** [`delivery.md`](../delivery.md) §Compatibility Policy (normative edits: version policy, scheduled-gate cadence, test strategy); a follow-on Decision Record under [`docs/decisions/`](../../decisions/) for the `MINIMUM_CODEX_VERSION`-vs-`TESTED_CODEX_VERSION` floor policy.
+**Revision:** Revised after round-1 adversarial-review adjudication (2026-05-29). Adds an [Acceptance Blockers](#acceptance-blockers-must-resolve-before-implementation) gate and tightens the classifier contract, comparator hardening, issue lifecycle, and CI mechanics.
+**Owner docs (on acceptance):** [`delivery.md`](../delivery.md) §Compatibility Policy (normative edits: version policy, scheduled-gate cadence, test strategy; also the normative home for the `MINIMUM_CODEX_VERSION`-vs-`TESTED_CODEX_VERSION` floor relationship). A follow-on Decision Record under [`docs/decisions/`](../../decisions/) carries the floor-policy *rationale* only — reachable by a one-line pointer from `delivery.md` and a cross-reference in [`decisions.md`](../decisions.md) §Open Questions — and is rationale-of-record, not the authority (see [Decision record](#decision-record)).
 **Prerequisite (landed):** Tier 1b installed-runtime guard — PR #15, merge commit `6d4a481`.
 **Related tickets:** [T-20260516-01](../../tickets/2026-05-16-codex-app-server-version-upgrade.md) (version upgrade), [T-20260516-02](../../tickets/2026-05-16-codex-app-server-contract-versioning.md) (contract-version assertion boundary), [T-20260429-02](../../tickets/2026-04-29-codex-collaboration-unsupported-server-request-reachability.md) (unsupported ServerRequest reachability).
 
 This document is **non-normative**. It defines the recurring drift gate's architecture and the decisions it locks. On acceptance, the normative claims graft into the owner docs above; this doc explains *why* and records the design boundaries. It **defines the gate; it does not rebaseline Codex** (see [Out of scope](#out-of-scope)).
+
+## Acceptance Blockers (must resolve before implementation)
+
+This draft is **not implementation-ready**. The items below must be resolved in this spec — or explicitly accepted as named ceilings — before any Tier 2 code is written. They supersede the looser [Open questions for review](#open-questions-for-review) at the end and are ordered by severity. Each is elaborated in the referenced section.
+
+- **B1 (critical) — The comparator cannot see the regression class the gate exists to catch.** The classifier rule "permission/sandbox/approval shape deltas → `needs-live-review`" has *no input to fire on*: `compare_app_server_schemas.py`'s `shape_summary` reads only top-level `properties`, and `SandboxPolicy` is not among its tracked nested definitions, so the `0.130` `readOnlyAccess`/`workspaceWrite` regression yields only `equal: false` — indistinguishable from a description-string edit. The gate would classify the exact break it was built to catch as harmless. **Resolution:** the comparator must descend into nested permission/sandbox/approval definitions (`/definitions/SandboxPolicy` variants, `readOnlyAccess`, `workspaceWrite`, permission-profile surfaces) and emit explicit permission-delta fields; the classifier must key off those fields, never infer containment risk from `equal: false`. → [Tier 2 comparator hardening](#tier-2--scheduled-ci-drift-analyzer), [Classifier contract](#classifier-contract).
+- **B2 (high) — A removed runtime-consumed file must escalate, not downgrade.** Today a missing consumed schema file is a `read_json` `SystemExit` → RED. Folding missing files blindly into `diagnostics → unclassified → GREEN-with-issue` would *invert* a safety signal. **Resolution:** the diagnostics taxonomy must distinguish `missing_consumed_file` / `missing_tracked_file` / `unexpected_file` / `parse_error`; a missing **consumed or permission-sensitive** file routes to `needs-live-review`, not generic `unclassified`. → [Tier 2 comparator hardening](#tier-2--scheduled-ci-drift-analyzer), [Classifier contract](#classifier-contract).
+- **B3 (high) — The `safe-to-upgrade` ceiling must be structural, not prose.** The "never emit `safe-to-upgrade` from schema alone" invariant is the gate's one load-bearing safety property and is currently a sentence. **Resolution:** `classify_drift`'s label must be a closed enum (Python `Literal`) lacking `safe-to-upgrade`, with a test that exhaustively asserts the forbidden label is unreachable and that permission deltas route to `needs-live-review`. → [Classifier contract](#classifier-contract).
+- **B4 (high) — The scheduled sentinel decays exactly when it is needed.** GitHub disables `schedule:` workflows after ~60 days without repository activity — i.e. during the quiet periods this gate exists to cover, reproducing the very "tracking decayed when no human re-ran it" failure one layer up. **Resolution:** require a documented `workflow_dispatch` recovery path **and** a staleness signal (a check that notices no recent successful drift run), or explicitly accept and document the ceiling. → [Tier 2](#tier-2--scheduled-ci-drift-analyzer), [Issue lifecycle](#issue-lifecycle).
+- **B5 (medium) — CI mechanics.** `permissions` must be `{ contents: read, issues: write }` (any `permissions:` block drops unlisted scopes to `none`); the `codex-drift` label must be **create-or-fallback**, never a post-analysis RED on a missing label; the rolling-issue workflow needs a `concurrency:` group so overlapping cron/`workflow_dispatch` runs don't race the single issue; and per-run comments must be **delta-gated** (comment only when the version delta or classification changes) so an unchanged `latest` doesn't spam the issue daily. → [Tier 2](#tier-2--scheduled-ci-drift-analyzer), [Issue lifecycle](#issue-lifecycle).
+
+**Recalibrated out of the blocker set (from round-1 review):** the floor-policy ADR routing is a one-line pointer cleanup, not an authority violation (see [Decision record](#decision-record)); the `regenerate_schema.sh` `rm -rf` objection is **withdrawn** — both targets are self-created `mktemp -d` dirs, and the global "never run `rm -rf`" rule governs direct shell actions, not invoking an already-safe maintenance script; and **blocking-escalation is not open for v1** — drift stays GREEN-with-issue unless the analyzer itself fails (see [Issue lifecycle](#issue-lifecycle)).
+
+**Deferred — recorded, not addressed in this revision** (tracked for the next scrutiny pass, deliberately out of the current patch scope): alpha-vs-SemVer raw-string handling on the opt-in `workflow_dispatch` path; routing the `foundation` (compatibility invariant) and `contracts` (classifier label enum / ServerRequest rule) claims to their owner docs alongside `delivery.md`; the `delivery.md` multi-surface version-prose problem (the baseline appears in three places / two formats, with `MINIMUM`/`TESTED` conflated) that complicates the Tier 1a prose↔constant check; npm-install pinning / supply-chain exposure; `required`-array sort stability for deterministic classifier input; the moving-target auto-close condition and the Tier 1b-RED vs Tier 2-GREEN disagreement for the same drift; and cron UTC time-of-day selection.
 
 ## Problem
 
@@ -68,48 +83,59 @@ A new GitHub Actions workflow on `schedule:` (**daily**) plus `workflow_dispatch
 
 **Cadence — daily.** Observed Codex release velocity is ~0.4 stable releases/day (`0.130`→`0.135` in 12 days), with an `alpha` (`0.136.0-alpha.1`) already staged. Weekly would queue 5–14 versions per run; daily keeps the rolling issue close to reality at negligible CI cost. (Confirm at review.)
 
-Sequence (all steps verified to run **unauthenticated, no network beyond npm/registry**):
+Sequence (steps 1–6 run **unauthenticated, with no network beyond the npm registry**; step 7 publishes via the GitHub Actions/REST API authenticated with `GITHUB_TOKEN` — see **Prerequisites** below and [Issue lifecycle](#issue-lifecycle)):
 
 1. Read `TESTED_CODEX_VERSION` from [`server/codex_compat.py`](../../../server/codex_compat.py); read current release from **npm `dist-tags.latest`** (`npm view @openai/codex dist-tags.latest`) — the authoritative source, matching the `codex --version` string exactly. **Ignore `alpha`** unless a `workflow_dispatch` input requests it.
 2. If `latest <= TESTED` → no drift; ensure the rolling issue is closed (see [Issue lifecycle](#issue-lifecycle)); exit GREEN.
 3. Install: `npm install -g @openai/codex@<latest>`. The package uses per-platform `optionalDependencies`, which npm auto-resolves on `ubuntu-latest` (linux-x64). **Post-install, verify `codex --version` == `codex-cli <latest>`** before proceeding.
 4. Generate the schema **bare, without `--experimental`** (matching `scripts/regenerate_schema.sh`, which generates fixtures this way), and apply the same canonical JSON key ordering the script uses, so the diff is apples-to-apples and deterministic.
 5. Diff via [`scripts/compare_app_server_schemas.py`](../../../scripts/compare_app_server_schemas.py) `--old-root tests/fixtures/codex-app-server/<TESTED> --new-root <generated>`.
-6. **Classify** the diff (see [Classifier ceiling](#classifier-ceiling)).
+6. **Classify** the diff (see [Classifier contract](#classifier-contract)).
 7. Publish the generated schema bundle + diff JSON + classification as workflow artifacts; create/update one rolling issue; write a job summary.
 
 **Prerequisites the analyzer needs that CI lacks today:**
 
 - **Node/npm setup** — current CI only sets up Python (`setup-uv`); the scheduled job needs a Node toolchain step.
-- **`permissions: { issues: write }`** — current `ci.yml` declares no permissions block; the default `GITHUB_TOKEN` is read-only on issues, so `gh issue` would 403 and turn the "success" outcome RED.
-- **Comparator hardening** — `compare_app_server_schemas.py` hardcodes its file inventory and raises `SystemExit` on a missing file. A release that adds/removes bundle files would crash with a traceback instead of a diff. The analyzer requires the comparator to **emit a `diagnostics` section** (`unexpected_files`, `missing_files`, `parse_errors`) instead of crashing. This is the first build step (see [Build sequence](#build-sequence)).
+- **`permissions: { contents: read, issues: write }`** — current `ci.yml` declares no permissions block. Setting *any* `permissions:` block drops every unlisted scope to `none`, so `contents: read` must be named explicitly or `actions/checkout` loses its token (it survives on a public repo via anonymous clone, but that is fragile and breaks if the repo ever goes private). `issues: write` is required because the default `GITHUB_TOKEN` is read-only on issues, so `gh issue` would 403 and turn the "success" outcome RED. (`GH_TOKEN` wiring and `gh` ergonomics are implementation-plan detail.)
+- **Comparator hardening (B1 + B2)** — `compare_app_server_schemas.py` hardcodes its file inventory, raises `SystemExit` on a missing file, and its `shape_summary` reads only top-level `properties`. Two requirements: **(a) nested permission visibility** — descend into permission/sandbox/approval definitions (`/definitions/SandboxPolicy` variants, `readOnlyAccess`, `workspaceWrite`, permission-profile surfaces) and emit explicit permission-delta fields, so the classifier's containment rule has a signal to fire on (B1); **(b) a typed `diagnostics` section** distinguishing `missing_consumed_file` / `missing_tracked_file` / `unexpected_file` / `parse_error` instead of crashing — where a missing **consumed or permission-sensitive** file routes to `needs-live-review`, never a downgrade to generic `unclassified`/GREEN (B2). This is the first build step (see [Build sequence](#build-sequence)).
+- **Schedule durability (B4)** — GitHub auto-disables `schedule:` workflows after ~60 days without repository activity. The analyzer needs a documented `workflow_dispatch` recovery path **and** a staleness signal (e.g. a Tier 1a check, or the rolling issue, that flags "no successful drift run in N days"), or an explicit, documented acceptance of that ceiling. Otherwise the sentinel goes dark precisely during the quiet periods it exists to cover.
 
-## Classifier ceiling
+## Classifier contract
 
-The classifier is `classify_drift(report: dict) -> {label, action, confidence}`, a pure function over the comparator output. Its labels are bounded:
+`classify_drift(report: dict) -> ClassifyResult`, a **pure** function over the comparator output. Its result is a typed, closed shape — not an open dict — so the safety ceiling is enforced structurally, not by prose.
 
-> CI may emit `harmless`, `relevant`, `needs-live-review`, or `unclassified`. **It must never emit `safe-to-upgrade` from schema alone.**
+**Output shape:** `{label, action, confidence, reasons, evidence_paths}`. `reasons` is a human-readable list of what drove the label; `evidence_paths` is the list of schema paths (e.g. `/definitions/SandboxPolicy/...`) the classification keyed off, so a reader of a >90-day-old issue can see *what* changed without the expired artifacts.
 
-Schema diffing proves protocol *surface* change; it cannot prove runtime **containment**. The `0.130` `readOnlyAccess`/`workspaceWrite` permission regression was offline-clean yet live-broken — schema-invisible. Only Tier 3b can support upgrade confidence.
+**Label is a closed enum (Python `Literal`), with no `safe-to-upgrade` member (B3):**
 
-Rules:
+> `label ∈ { harmless, relevant, needs-live-review, unclassified }`. **`safe-to-upgrade` is not in the enum and must be unreachable from schema input.** Schema diffing proves protocol *surface* change; it cannot prove runtime **containment**. The `0.130` `readOnlyAccess`/`workspaceWrite` regression was offline-clean yet live-broken. Only Tier 3b can support upgrade confidence.
+
+**Risk and unknownness are separate axes (resolves the severity-precedence gap).** The three *risk* labels carry a total order — `harmless < relevant < needs-live-review` — used to compute the rolling issue's "highest current classification." `unclassified` is **not** a point on that scale; it is an orthogonal "could not be assessed" flag that always routes to human review and pins the issue open regardless of risk rank. So "highest current classification" = the max over the risk axis, with `unclassified` independently forcing human-triage state.
+
+**Rules (each keyed off explicit comparator fields, never `equal: false` inference):**
 
 - **ClientRequest additions** (plugin *sends*): `harmless`/`relevant` — additive, the plugin opts in.
 - **ClientRequest removals or shape changes** to runtime-consumed methods: `relevant` → `needs-live-review`.
-- **ServerRequest additions** (plugin must *receive/handle*): default `needs-live-review` or `unclassified`. Reachability cannot be answered from schema; it is owned by [T-20260429-02](../../tickets/2026-04-29-codex-collaboration-unsupported-server-request-reachability.md). Until that produces a reachability registry, new ServerRequest methods surface explicitly as `unclassified`, never silently passed.
-- **Permission / sandbox / approval shape deltas**: `needs-live-review` — the schema-invisible containment class.
+- **A removed/missing consumed or permission-sensitive schema file** (from the `diagnostics` taxonomy, B2): `needs-live-review` — never `unclassified`/GREEN.
+- **ServerRequest additions** (plugin must *receive/handle*): default `needs-live-review` or `unclassified`. Reachability cannot be answered from schema; it is owned by [T-20260429-02](../../tickets/2026-04-29-codex-collaboration-unsupported-server-request-reachability.md). Until that produces a reachability registry, new ServerRequest methods surface explicitly as `unclassified`, never silently passed. *(The label enum and this rule intersect `contracts.md`'s `kind: unknown` contract; routing them to that owner doc is a [deferred](#acceptance-blockers-must-resolve-before-implementation) item.)*
+- **Permission / sandbox / approval shape deltas** (from the nested permission-delta fields the hardened comparator now emits, B1): `needs-live-review` — the schema-invisible containment class. This rule is only implementable once B1 lands; without the explicit fields it has no input.
 - **Unknown bundle files / parse failures**: `unclassified`, carried from the comparator `diagnostics` section.
+
+**Source of truth for "runtime-consumed methods":** the comparator's existing constants (`DIRECT_RUNTIME_CONSUMED`, `THREAD_TURN_REQUESTS`, `THREAD_PERMISSION_RESPONSES`, `SERVER_METHOD_FILES`, command-approval surfaces) are the single registry the classifier reads; the term is not redefined in prose here, and the per-file lists stay code-owned to avoid doc drift.
 
 `unclassified` is an explicit, non-silent state — it routes to human review, it does not mean "fine."
 
 ## Issue lifecycle
 
-- **Permissions**: the workflow declares `permissions: { issues: write }`.
-- **One rolling issue**, found idempotently by a fixed **label** (e.g. `codex-drift`) and deterministic title — not a new issue per run. The problem is singular ("baseline is stale"), not per-release.
-- **Per-run update**: append a timestamped comment with the version delta and classification; keep the issue **severity label/title mutable**, reflecting the highest current classification.
+- **Permissions**: the workflow declares `permissions: { contents: read, issues: write }` (see Prerequisites — `contents: read` is not optional once a `permissions:` block exists).
+- **Label bootstrap (B5)**: before any `gh issue create`/`gh issue edit --add-label`, run an idempotent `gh label create codex-drift --force` (create-or-fallback). A missing or deleted label must **never** turn a successful analysis RED via the "publication failed" path — that would discard a completed diff+classification over a cosmetic label gap. (The find step, `gh issue list --label`, returns empty on a missing label rather than failing; the failure is in the subsequent create/edit-with-label.)
+- **One rolling issue**, found idempotently by a fixed **label** (`codex-drift`) and deterministic title — not a new issue per run. The problem is singular ("baseline is stale"), not per-release.
+- **Concurrency (B5)**: the workflow declares a `concurrency:` group (single in-flight run; queue or cancel-superseded). Without it, an overlapping cron tick and `workflow_dispatch` run race the find→comment→mutate-label sequence — both can find no open issue and each create one, or clobber each other's severity title. Label idempotency dedups *identity* but not *concurrent execution*.
+- **Cross-epoch reopen (H3)**: the label+title lookup searches **all** issues including closed (`--state all`). A recurring drift after a prior resolution **reopens the existing closed issue** rather than opening a new one, preserving the "one rolling issue / no duplicates" invariant across close→reopen cycles.
+- **Per-run update — delta-gated (B5)**: comment **only when the version delta or classification changes** (an unchanged `latest` must not append a near-identical comment every day). When it does comment, embed a **durable summary** in the comment body — version delta, classification (`label`/`action`/`confidence`/`reasons`), the method add/remove list, and the `diagnostics` section — not just links to the (90-day-expiring) artifacts. Keep the issue **severity label/title mutable**, reflecting the highest current risk-axis classification. Detail beyond the comment lives in artifacts and is regenerable offline via Tier 3a from the recorded version delta.
 - **Auto-close on resolution**: when `TESTED_CODEX_VERSION >= npm latest` (the rebaseline caught up), post a "drift resolved" comment and close the issue. No zombie issue, no duplicates.
-- **Job exit policy**: ordinary drift detection is a **successful routed outcome** → job GREEN. The job goes RED **only** for analyzer failure (latest unresolved, install/generate/diff failed, publication failed) or an explicit *blocking-escalation policy* (open question — should e.g. a `needs-live-review` removal of a runtime-consumed method fail the job?). Drift itself never reds the loop.
-- **Notification**: write `$GITHUB_STEP_SUMMARY` with the classification and a link to the issue, so a GREEN run is still visible — a green job with a silent issue is an operator blind spot.
+- **Job exit policy — locked for v1**: ordinary drift detection is a **successful routed outcome** → job GREEN. The job goes RED **only** for analyzer/infrastructure failure (latest unresolved, install/generate/diff/publication failed). **Drift itself never reds the loop** — this is the v1 default and is *not* an open question. A later opt-in escalation exception (e.g. flip RED on a `needs-live-review` removal of a runtime-consumed method) may be layered additively on top of this default; it does not block the v1 analyzer.
+- **Notification**: write `$GITHUB_STEP_SUMMARY` with the classification and a link to the issue so a GREEN run is visible on its run page. Note the step summary is run-scoped and retention-bound — the **open issue itself** is the durable, operator-facing signal; the step summary is a convenience, not the primary visibility mechanism.
 
 ## Tier 3a — Offline rebaseline feasibility
 
@@ -135,25 +161,25 @@ This is the **only** tier allowed to support "runtime-safe enough to promote" / 
 
 **Open decision, not resolved here:** does `MINIMUM_CODEX_VERSION` move in lockstep with `TESTED_CODEX_VERSION`, or stay a lower compatibility floor (a tolerance window)? This is load-bearing — Tier 1a's prose↔constant consistency and any future widening of the floor depend on the intended relationship being recorded, and today no durable record states it.
 
-Route it to a follow-on **Decision Record** at `docs/decisions/<date>-codex-version-floor-policy.md` (ADR format per [`2026-05-16-security-hook-guard-extension.md`](../../decisions/2026-05-16-security-hook-guard-extension.md)), produced as an exit condition of the rebaseline workflow ([T-20260516-01](../../tickets/2026-05-16-codex-app-server-version-upgrade.md)). This spec records the **need and the home**; it does not pick the policy.
+**Routing (recalibrated):** the floor relationship's **normative home is `delivery.md` §Compatibility Policy**, which already owns the `MINIMUM`/`TESTED` constants and the version-upgrade workflow. A follow-on **Decision Record** at `docs/decisions/<date>-codex-version-floor-policy.md` (ADR format per [`2026-05-16-security-hook-guard-extension.md`](../../decisions/2026-05-16-security-hook-guard-extension.md)) carries the **rationale**, produced as an exit condition of the rebaseline workflow ([T-20260516-01](../../tickets/2026-05-16-codex-app-server-version-upgrade.md)). Because `docs/decisions/` sits outside the spec authority tree, the ADR must be reachable from the authority path: a one-line normative pointer in `delivery.md` §Compatibility Policy plus a cross-reference in [`decisions.md`](../decisions.md) §Open Questions. This matches the repo's established "ADR-as-rationale, normative-claim-in-owner-doc" pattern. This spec records the **need and the home**; it does not pick the policy.
 
 ## Test strategy and seams
 
 Follow the repo's existing seam convention: **module-level `@patch` of `subprocess` at the test boundary** (as `tests/test_codex_compat.py` does for `get_codex_version`), **not** callable injection threaded through call sites. Concretely:
 
-- `classify_drift` is a pure function over the comparator dict → unit-test with synthetic diff fixtures (additive ClientRequest, ServerRequest addition, permission-shape delta, unknown file → `unclassified`).
-- Comparator hardening → unit-test a synthetic bundle missing/adding a file and assert a `diagnostics` section is emitted, not a crash.
-- The npm-latest lookup and codex install are patched at the subprocess boundary so the analyzer logic is testable offline.
+- `classify_drift` is a pure function over the comparator dict → unit-test with synthetic diff fixtures (additive ClientRequest, ServerRequest addition, permission-shape delta, removed consumed file, unknown file → `unclassified`). **Negative tests (B3):** assert that *no* input produces `safe-to-upgrade` (the closed `Literal` makes it a type error, and a test enumerates/fuzzes report shapes to confirm unreachability) and that a permission/sandbox delta and a removed consumed file both route to `needs-live-review`.
+- Comparator hardening → unit-test (a) a synthetic bundle missing/adding a file emits the typed `diagnostics` section (not a crash) **and routes a missing *consumed* file to `needs-live-review`, not `unclassified`** (B2); (b) a `SandboxPolicy` nested-variant change (the `0.130` `readOnlyAccess` removal) produces an explicit permission-delta field, not a bare `equal: false` (B1). The test must witness the removed-consumed-file path specifically — an inventory-churn-only test passes while the real crash/downgrade path stays live.
+- The npm-latest lookup and codex install are patched at the subprocess boundary so the analyzer logic is testable offline — **which requires that logic to live in an importable Python module, not only in workflow YAML**; factoring it out is an implementation-plan requirement, else there is no `subprocess` boundary to `@patch`.
 
 ## Build sequence
 
-For the follow-on implementation plan, **not** this spec's scope, and **no Tier 2 code until this spec is accepted**:
+For the follow-on implementation plan, **not** this spec's scope, and **no Tier 2 code until this spec is accepted** (and the [Acceptance Blockers](#acceptance-blockers-must-resolve-before-implementation) resolved):
 
-1. Comparator hardening (diagnostics instead of crash) — prerequisite for everything downstream.
-2. `classify_drift` + ceiling, with synthetic-diff unit tests.
+1. Comparator hardening — nested permission-delta extraction (B1) + typed `diagnostics` taxonomy with consumed/permission-file escalation (B2). Prerequisite for everything downstream.
+2. `classify_drift` as a closed-`Literal` contract + ceiling, with synthetic-diff unit tests and the `safe-to-upgrade`-unreachable negative test (B3).
 3. Tier 1a consistency checks + `.status.json` marker format (warn-first).
-4. Scheduled workflow (Node setup, `issues: write`) + rolling-issue routing + job summary.
-5. Docs/ADR/status updates: graft normative claims into `delivery.md`, create the floor-policy ADR, update `docs/status/`.
+4. Scheduled workflow (Node setup, `permissions: { contents: read, issues: write }`, `concurrency:` group, `workflow_dispatch` + staleness/dormancy mitigation B4) + label-bootstrap and cross-epoch-reopen rolling-issue routing + delta-gated durable comments + job summary.
+5. Docs/ADR/status updates: graft normative claims into `delivery.md` (with the floor-policy pointer), create the floor-policy rationale ADR, update `docs/status/`.
 
 Tier 1b is already done.
 
@@ -164,6 +190,7 @@ This spec **defines the gate**; it does **not** rebaseline Codex. The stale `cho
 ## Open questions for review
 
 - **Cadence**: daily confirmed? (recommended given release velocity)
-- **Blocking-escalation policy**: should any classification ever fail the scheduled job, or is GREEN-with-issue always the right outcome for detected drift?
-- **Floor policy**: the `MINIMUM`-vs-`TESTED` ADR (deferred to its own decision record).
+- **Floor policy**: the `MINIMUM`-vs-`TESTED` relationship (rationale deferred to its own ADR; normative home is `delivery.md` — see [Decision record](#decision-record)).
 - **Marker format**: the `.status.json` schema for extra fixture dirs.
+
+*(Resolved since round-1 review: **blocking-escalation** is no longer open — v1 locks GREEN-with-issue unless the analyzer fails, see [Issue lifecycle](#issue-lifecycle). The substantive items now live under [Acceptance Blockers](#acceptance-blockers-must-resolve-before-implementation).)*
