@@ -18,6 +18,7 @@ from server.codex_compat import (
     MINIMUM_CODEX_VERSION,
     OPTIONAL_METHODS,
     REQUIRED_METHODS,
+    TESTED_CODEX_VERSION,
     CompatCheckResult,
     SemVer,
     check_live_runtime_compatibility,
@@ -45,6 +46,28 @@ class TestGetCodexVersion:
         minimum = SemVer.parse(MINIMUM_CODEX_VERSION)
         assert version >= minimum, (
             f"Installed codex {version} is below minimum {minimum}"
+        )
+
+    def test_installed_matches_tested_baseline(self):
+        """Installed binary must equal the tested baseline, or fixtures are stale.
+
+        The module-level ``skipif`` guard skips this when no codex binary is
+        present, so repo-only CI is unaffected. When a binary IS present and its
+        version differs from ``TESTED_CODEX_VERSION``, the vendored fixtures under
+        ``tests/fixtures/codex-app-server/<TESTED_CODEX_VERSION>/`` no longer match
+        the installed Codex — yet the wire-contract suite keeps validating runtime
+        payloads against that stale schema and passes silently. This guard turns
+        that silent drift into a loud, named failure.
+        """
+        installed = get_codex_version()
+        tested = SemVer.parse(TESTED_CODEX_VERSION)
+        assert installed == tested, (
+            f"Installed codex {installed} != tested baseline {tested}. "
+            f"Vendored fixtures are stale relative to the installed binary; the "
+            f"wire-contract suite validates against the stale schema and passes "
+            f"silently. Rebaseline via 'scripts/regenerate_schema.sh <version>' and "
+            f"bump TESTED_CODEX_VERSION, or align the installed binary, before "
+            f"trusting the contract gate."
         )
 
 

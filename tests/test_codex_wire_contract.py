@@ -7,6 +7,7 @@ from typing import Any, cast
 
 from jsonschema.validators import validator_for
 
+from server.codex_compat import TESTED_CODEX_VERSION
 from server.delegation_controller import DelegationController
 from server.models import PendingServerRequest
 from server.runtime import (
@@ -53,7 +54,7 @@ class CapturingClient:
                 "codexHome": "/tmp/codex",
                 "platformFamily": "unix",
                 "platformOs": "macos",
-                "userAgent": "codex-cli 0.117.0",
+                "userAgent": f"codex-cli {TESTED_CODEX_VERSION}",
             }
         if method == "account/read":
             return {"account": {"type": "openai"}, "requiresOpenaiAuth": False}
