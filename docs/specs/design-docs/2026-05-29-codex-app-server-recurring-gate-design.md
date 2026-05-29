@@ -2,7 +2,7 @@
 
 **Date:** 2026-05-29
 **Status:** Draft (design) — non-normative until accepted
-**Revision:** Revised after round-1 adversarial-review adjudication (2026-05-29). Adds an [Acceptance Blockers](#acceptance-blockers-and-phase-0-prerequisites) gate and tightens the classifier contract, comparator hardening, issue lifecycle, and CI mechanics.
+**Revision:** Revised through three rounds of adversarial-review adjudication (2026-05-29). Adds the [Acceptance Blockers](#acceptance-blockers-and-phase-0-prerequisites) gate, the classifier contract, comparator hardening with a stable permission-delta contract, the drift-analyzer liveness check, and tightened issue-lifecycle / CI mechanics.
 **Owner docs (on acceptance):** [`delivery.md`](../delivery.md) §Compatibility Policy (normative edits: version policy, scheduled-gate cadence, test strategy; also the normative home for the `MINIMUM_CODEX_VERSION`-vs-`TESTED_CODEX_VERSION` floor relationship). A follow-on Decision Record under [`docs/decisions/`](../../decisions/) carries the floor-policy *rationale* only — reachable by a one-line pointer from `delivery.md` and a cross-reference in [`decisions.md`](../decisions.md) §Open Questions — and is rationale-of-record, not the authority (see [Decision record](#decision-record)).
 **Prerequisite (landed):** Tier 1b installed-runtime guard — PR #15, merge commit `6d4a481`.
 **Related tickets:** [T-20260516-01](../../tickets/2026-05-16-codex-app-server-version-upgrade.md) (version upgrade), [T-20260516-02](../../tickets/2026-05-16-codex-app-server-contract-versioning.md) (contract-version assertion boundary), [T-20260429-02](../../tickets/2026-04-29-codex-collaboration-unsupported-server-request-reachability.md) (unsupported ServerRequest reachability).
@@ -11,7 +11,7 @@ This document is **non-normative**. It defines the recurring drift gate's archit
 
 ## Acceptance Blockers and phase-0 prerequisites
 
-This draft is **not yet ready to hand to implementation planning**. Two distinct gates apply — conflating them is the error this section fixes:
+This section defines the **two distinct gates** that govern implementation — conflating them is the error it fixes:
 
 - **Spec-acceptance gate** — the design must *commit to* the B1–B5 approaches below. That is a decision, recorded here; it is what acceptance means.
 - **Phase-0 implementation gate** — B1–B3 (comparator nested-permission visibility, the `diagnostics` taxonomy, the closed-`Literal` classifier) must be *implemented and tested before* any scheduled-workflow or issue-routing code (B4/B5) is written — see [Build sequence](#build-sequence).
@@ -26,7 +26,7 @@ Items are ordered by severity and supersede the looser [Open questions for revie
 
 **Recalibrated out of the blocker set (from round-1 review):** the floor-policy ADR routing is a one-line pointer cleanup, not an authority violation (see [Decision record](#decision-record)); the `regenerate_schema.sh` `rm -rf` objection is **withdrawn** — both targets are self-created `mktemp -d` dirs, and the global "never run `rm -rf`" rule governs direct shell actions, not invoking an already-safe maintenance script; and **blocking-escalation is not open for v1** — drift stays GREEN-with-issue unless the analyzer itself fails (see [Issue lifecycle](#issue-lifecycle)).
 
-**Deferred — recorded, not addressed in this revision** (tracked for the next scrutiny pass, deliberately out of the current patch scope): a future **prerelease investigation mode** (a separate workflow that would preserve raw npm versions and avoid `SemVer` suffix stripping — alpha is out of v1 scope, see [Out of scope](#out-of-scope)); routing the `foundation` (compatibility invariant) and `contracts` (classifier label enum / ServerRequest rule) claims to their owner docs alongside `delivery.md`; the `delivery.md` multi-surface version-prose problem (the baseline appears in three places / two formats, with `MINIMUM`/`TESTED` conflated) that complicates the Tier 1a prose↔constant check; npm-install pinning / supply-chain exposure; `required`-array sort stability for deterministic classifier input; the moving-target auto-close condition and the Tier 1b-RED vs Tier 2-GREEN disagreement for the same drift; and cron UTC time-of-day selection.
+**Deferred — not addressed in this revision** (recorded for implementation planning / normative grafting, deliberately out of v1 scope): a future **prerelease investigation mode** (a separate workflow that would preserve raw npm versions and avoid `SemVer` suffix stripping — alpha is out of v1 scope, see [Out of scope](#out-of-scope)); routing the `foundation` (compatibility invariant) and `contracts` (classifier label enum / ServerRequest rule) claims to their owner docs alongside `delivery.md`; the `delivery.md` multi-surface version-prose problem (the baseline appears in three places / two formats, with `MINIMUM`/`TESTED` conflated) that complicates the Tier 1a prose↔constant check; npm-install pinning / supply-chain exposure; `required`-array sort stability for deterministic classifier input; the moving-target auto-close condition and the Tier 1b-RED vs Tier 2-GREEN disagreement for the same drift; and cron UTC time-of-day selection.
 
 ## Problem
 
